@@ -30,6 +30,13 @@ extern "C" {
 // hazeDeviceReset clears all process-global HAZE state (allocator pool,
 // epoch, compiler backend, configuration, streams, events, active
 // device) AND the thread-local last-error flag. Mirrors cudaDeviceReset.
+//
+// hazeDeviceEnablePeerAccess and hazeDeviceCanAccessPeer are implemented for
+// the simulator-representable peer topology: peer relationships are modelled
+// in the core device layer for the in-process simulator, so enabling and
+// querying peer access succeed against that model. Physical multi-chip
+// hardware validation is human follow-up and is not exercised by the default
+// build or test suite.
 
 HAZE_API hazeError_t hazeGetDeviceCount(int *count) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetDevice(int device) HAZE_NOEXCEPT;
@@ -54,8 +61,13 @@ HAZE_API hazeError_t hazeDeviceCanAccessPeer(int *can_access, int device, int pe
 // accepted for CUDA-shape parity but is intentionally not honoured for
 // ordering: HAZE is a recording layer that emits FHETCH IR, not an
 // execution engine. Stream-relative ordering is meaningless until
-// hazeFlush() materializes the recorded program. The async entries
-// behave identically to their sync counterparts.
+// hazeFlush() materializes the recorded program. hazeMallocAsync,
+// hazeFreeAsync, hazeMemcpyAsync, and hazeMemsetAsync behave identically
+// to their sync counterparts. hazeMemcpyPeerAsync is an implemented
+// simulator-representable peer copy: it records a device-to-device copy
+// across the simulated peer topology modelled in the core device layer;
+// physical multi-chip hardware validation is human follow-up and is not
+// exercised by the default build or test suite.
 //
 // hazePointerGetAttributes returns HAZE_SUCCESS for any non-null
 // `attrs` argument. Pointers obtained from hazeMalloc / hazeMallocAsync
@@ -364,9 +376,15 @@ HAZE_API hazeError_t hazeModDown(void *const *dst, const void *const *src, const
 HAZE_API hazeError_t hazeModUp(void *const *dst, const void *const *src, const void *params,
                                hazeStream_t stream) HAZE_NOEXCEPT;
 
-// Graph recording and execution. Names mirror CUDA's graph API. All
-// entries currently return HAZE_ERROR_NOT_SUPPORTED — graph capture is
-// a future task.
+// Graph recording and execution. Names mirror CUDA's graph API. Graph
+// capture is implemented on the record-once / replay-many epoch-snapshot
+// model: hazeStreamBeginCapture enters capture mode; hazeStreamEndCapture
+// snapshots the recorded FHETCH op-sequence and input bindings into a
+// hazeGraph_t; hazeGraphInstantiate prepares a re-dispatchable
+// hazeGraphExec_t; hazeGraphLaunch re-dispatches the snapshot and may be
+// called repeatedly, relying on DevAddr operand stability across replays;
+// hazeGraphExecUpdate refreshes a same-topology exec; hazeGraphExecDestroy
+// and hazeGraphDestroy release the exec and graph respectively.
 
 HAZE_API hazeError_t hazeStreamBeginCapture(hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeStreamEndCapture(hazeStream_t stream, hazeGraph_t *graph) HAZE_NOEXCEPT;
@@ -376,7 +394,13 @@ HAZE_API hazeError_t hazeGraphExecUpdate(hazeGraphExec_t exec, hazeGraph_t graph
 HAZE_API hazeError_t hazeGraphExecDestroy(hazeGraphExec_t exec) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeGraphDestroy(hazeGraph_t graph) HAZE_NOEXCEPT;
 
-// Profiling / multi-device stubs.
+// Performance counters. hazeGetPerformanceCounters writes a
+// hazePerformanceCounters snapshot through its `counters` out-parameter
+// (pass the address of a hazePerformanceCounters); it reports the
+// cumulative op count, bytes moved (H2D / D2H / D2D), flush count, and the
+// cumulative and most-recent flush/replay timings since process start or
+// the last hazeDeviceReset(). Returns HAZE_ERROR_INVALID_VALUE if
+// `counters` is NULL.
 
 HAZE_API hazeError_t hazeGetPerformanceCounters(void *counters) HAZE_NOEXCEPT;
 

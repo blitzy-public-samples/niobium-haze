@@ -19,12 +19,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <haze/haze_types.h>
 #include <niobium/fhetch_api.h>
 #include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace haze {
@@ -32,6 +34,17 @@ namespace haze {
 // fhetch's copy sentinel (TraceWriter COPY_MODULUS_VALUE); doubles as the
 // "modulus unknown" marker for the addr->modulus tracking below.
 inline constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
+
+// Self-contained, copyable handle to a captured epoch trace. Owns a
+// graph-private on-disk project directory (.fhetch + inputs + templates +
+// cryptocontext) plus the output binding table used to repopulate shadow
+// buffers on each replay. Produced by EpochState::end_capture_snapshot_locked;
+// consumed by EpochState::replay_snapshot_locked.
+struct EpochTraceSnapshot {
+    std::filesystem::path project_dir;                    // graph-owned copy
+    std::vector<std::pair<DevAddr, std::string>> outputs; // addr -> probe name
+    std::string target;                                   // replay target
+};
 
 // Singleton tracking the polymap, pending outputs, and recording flag for
 // the active epoch; replay_and_populate() drains it at flush time. Public
@@ -139,6 +152,25 @@ class EpochState {
     // invalidate() drops it so a recycled allocation gets a fresh name.
     std::string mrp_group_name_locked(bool output, DevAddr leading) HAZE_REQUIRES(mutex_);
 
+    // Enter graph-capture mode: open a recording (via ensure_recording_locked)
+    // and set capturing_. No effect if a capture is already active.
+    void begin_capture_locked() noexcept HAZE_REQUIRES(mutex_);
+
+    // Finalize the open recording to an on-disk project dir, copy it to a
+    // graph-private unique directory, record the output binding table, clear
+    // epoch state, and leave capture mode. Returns the populated snapshot.
+    std::expected<EpochTraceSnapshot, HazeInternalError> end_capture_snapshot_locked() noexcept
+        HAZE_REQUIRES(mutex_);
+
+    // Re-dispatch a captured snapshot: replay its on-disk project and
+    // repopulate each output DevAddr's shadow. Repeatable; preserves the
+    // epoch -> allocator lock order (update_shadow runs under mutex_).
+    std::expected<void, HazeInternalError>
+    replay_snapshot_locked(const EpochTraceSnapshot &snapshot) noexcept HAZE_REQUIRES(mutex_);
+
+    // True while a graph-capture region (begin_capture..end_capture) is active.
+    bool capturing_locked() const noexcept HAZE_REQUIRES(mutex_);
+
     EpochState(const EpochState &) = delete;
     EpochState &operator=(const EpochState &) = delete;
 
@@ -216,6 +248,9 @@ class EpochState {
     uint64_t input_counter_ HAZE_GUARDED_BY(mutex_) = 0;
     uint64_t output_counter_ HAZE_GUARDED_BY(mutex_) = 0;
     bool recording_ HAZE_GUARDED_BY(mutex_) = false;
+    // Set between begin_capture_locked and end_capture_snapshot_locked; keeps
+    // finalize_locked from clearing epoch state mid-capture.
+    bool capturing_ HAZE_GUARDED_BY(mutex_) = false;
 
     // Friend so EpochSession's ACQUIRE/RELEASE attributes can name mutex_.
     friend class EpochSession;

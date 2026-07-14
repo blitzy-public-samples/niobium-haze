@@ -37,4 +37,11 @@ std::expected<void, HazeInternalError> device_fill_properties(hazeDeviceProp *pr
                                                               int device) noexcept;
 void device_reset() noexcept;
 
+// Simulator peer-access topology. Only simulator-representable behavior is
+// modeled; physical multi-chip validation is human follow-up. Peer state is
+// reset by device_reset().
+std::expected<void, HazeInternalError> device_enable_peer_access(int peer,
+                                                                 unsigned int flags) noexcept;
+std::expected<bool, HazeInternalError> device_can_access_peer(int device, int peer) noexcept;
+
 } // namespace haze

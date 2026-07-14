@@ -12,13 +12,38 @@
 // from the Product.
 #include "common/log.hpp"
 
+#include <cstdint>
 #include <iostream>
 #include <string_view>
 
 namespace haze {
 
+namespace {
+thread_local std::uint64_t g_correlation_id = 0;
+} // namespace
+
+std::uint64_t current_correlation_id() noexcept {
+    return g_correlation_id;
+}
+
+void set_correlation_id(std::uint64_t id) noexcept {
+    g_correlation_id = id;
+}
+
+CorrelationScope::CorrelationScope(std::uint64_t id) noexcept : previous_(g_correlation_id) {
+    g_correlation_id = id;
+}
+
+CorrelationScope::~CorrelationScope() {
+    g_correlation_id = previous_;
+}
+
+void log_error(std::string_view tag, std::string_view body, std::uint64_t correlation_id) noexcept {
+    std::cerr << "[haze] [cid=" << correlation_id << "] " << tag << ": " << body << '\n';
+}
+
 void log_error(std::string_view tag, std::string_view body) noexcept {
-    std::cerr << "[haze] " << tag << ": " << body << '\n';
+    log_error(tag, body, g_correlation_id);
 }
 
 } // namespace haze
