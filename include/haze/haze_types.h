@@ -196,4 +196,18 @@ typedef struct {
     size_t p_base_len;
 } hazeModUpParams;
 
+// Snapshot of runtime performance counters returned by
+// hazeGetPerformanceCounters. All values are cumulative since process
+// start or the most recent hazeDeviceReset(). Byte counts are in bytes;
+// flush timings are in nanoseconds.
+typedef struct {
+    uint64_t op_count;            // total FHETCH ops emitted (SRP + MRP + basis-convert)
+    uint64_t bytes_h2d;           // cumulative host-to-device bytes moved
+    uint64_t bytes_d2h;           // cumulative device-to-host bytes moved
+    uint64_t bytes_d2d;           // cumulative device-to-device bytes moved
+    uint64_t flush_count;         // number of hazeFlush() replay invocations
+    uint64_t flush_time_ns_total; // cumulative flush/replay wall time (nanoseconds)
+    uint64_t flush_time_ns_last;  // most-recent flush/replay wall time (nanoseconds)
+} hazePerformanceCounters;
+
 #endif /* HAZE_TYPES_H */

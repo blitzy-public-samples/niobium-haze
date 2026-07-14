@@ -19,6 +19,31 @@ For the FHETCH Polynomial IR instruction set, session API, trace format, and
 simulator internals, see the companion repository:
 [`niobium-fhetch`](https://github.com/NiobiumInc/niobium-fhetch).
 
+## Documentation
+
+This README is the quickest way in; deeper references live under
+[`docs/`](docs/):
+
+- [`docs/index.md`](docs/index.md) — documentation landing page and map.
+- [`docs/architecture.md`](docs/architecture.md) — the record-and-replay
+  design, the API / core / common layering, and the replay-bridge boundary.
+- [`docs/building.md`](docs/building.md) — standalone, submodule, and nix
+  build flows in more depth than the Building section below.
+- [`docs/testing.md`](docs/testing.md) — the Catch2 suites plus the benchmark
+  and coverage tooling, and how to run each locally.
+- [`docs/decision-log.md`](docs/decision-log.md) — the rationale behind every
+  non-trivial design decision. It is the single source of truth for why a
+  choice was made; code comments deliberately do not carry that rationale.
+- [`docs/observability/README.md`](docs/observability/README.md) — the
+  library-context observability model and the shipped dashboard template.
+
+Runnable, copy-pasteable code lives under [`examples/`](examples/): the pure-C
+[`quickstart.c`](examples/quickstart.c) and the decrypt-verified CKKS
+[`ckks22.cpp`](examples/ckks22.cpp), with build and run instructions in
+[`examples/README.md`](examples/README.md). Both files are byte-for-byte
+mirrors of the two fenced examples in this README, which remain the source of
+truth that CI extracts and gates.
+
 ## How it fits together
 
 ```
@@ -98,6 +123,12 @@ C-ABI sequence (configure -> H2D -> `hazeAddMrp` over the base -> tag -> flush
 crypto. Both are extracted and gated in CI (`make test-readme`), so the code
 below cannot silently rot: `scripts/test_readme_examples.sh` compiles and runs
 each one against the shipped `libhaze`.
+
+The two fenced blocks below are the authoritative source of truth: CI extracts
+them verbatim by their `readme-example` markers. The runnable copies under
+[`examples/`](examples/) — `examples/quickstart.c` and `examples/ckks22.cpp` —
+are byte-for-byte mirrors of these regions, so edit the README block, not the
+mirror.
 
 ### C — raw 22-limb add, verified per residue
 
@@ -633,6 +664,71 @@ tag plus environment:
   Requires `NIOBIUM_COMPILER_ROOT` pointing at a checkout containing
   `build/nbcc_fhetch_replay`.
 
+## Benchmarking
+
+A [Google Benchmark](https://github.com/google/benchmark) micro-benchmark suite
+lives under [`benchmark/`](benchmark/). It measures the polynomial-level FHE ops
+— add, multiply, NTT, and automorph, in both their base (SRP) and MRP forms —
+and the full record -> flush -> replay path through the in-process simulator.
+
+```sh
+make bench          # configures with -DHAZE_BUILD_BENCHMARKS=ON and runs the suite
+```
+
+The benchmarks build as a **separate executable** that links the compiled haze
+objects; they are never absorbed into the shipped `libhaze`, so the library's
+ABI and the symbol-leak audit are unaffected. A CI job runs the suite, emits
+JSON, and compares it against the checked-in baseline at
+[`benchmark/baseline.json`](benchmark/baseline.json), flagging regressions
+beyond a tolerance. The suite establishes regression detection only; it does not
+tune the ops or the record/replay path.
+
+## Coverage
+
+Line coverage is measured with Clang's source-based instrumentation. Configure
+with `-DHAZE_COVERAGE=ON` and drive the report through the Makefile:
+
+```sh
+make coverage       # configures with -DHAZE_COVERAGE=ON and runs scripts/coverage.sh
+```
+
+[`scripts/coverage.sh`](scripts/coverage.sh) runs the instrumented test binary,
+merges the raw profiles with `llvm-profdata merge` and exports an lcov report
+with `llvm-cov export -format=lcov`, scoped to the runtime sources under
+[`src/core/`](src/core/) and [`src/api/`](src/api/). The CI coverage job
+enforces an **80% line-coverage threshold** over those two trees and fails the
+build below it. The threshold gate was turned on only after the backfill and
+error-path hardening work raised coverage above the bar, so enabling it does not
+turn the branch red retroactively.
+
+## Observability
+
+Haze is a C++ shared library with a C ABI rather than a network service, so the
+usual "structured logs + tracing + metrics endpoint + health checks" model is
+reinterpreted for the library context (the reasoning is recorded in
+[`docs/decision-log.md`](docs/decision-log.md)):
+
+- **Structured logging with correlation IDs** — the tagged sink in
+  [`src/common/log.hpp`](src/common/log.hpp) /
+  [`src/common/log.cpp`](src/common/log.cpp) emits structured fields keyed by a
+  correlation ID tied to the current epoch / stream, so a single record ->
+  flush -> replay cycle can be followed end to end.
+- **Metrics surface** — the "metrics endpoint" is the `hazeGetPerformanceCounters`
+  query surface, reporting op counts, bytes moved, and flush timings via the
+  additive `hazePerformanceCounters` struct.
+- **Tracing** — op / epoch spans trace the record -> flush -> replay path,
+  including the crossing into the `replay_bridge/` OpenFHE boundary.
+- **Health / readiness** — maps to lifecycle and config-state introspection
+  (whether a device is configured, an epoch is open, and it has flushed).
+- **Dashboard template** — a ready-to-import template ships under
+  [`docs/observability/`](docs/observability/); see
+  [`docs/observability/README.md`](docs/observability/README.md) for the
+  counters-to-metrics mapping.
+
+The three documented no-op entry points (`hazeStreamSynchronize`,
+`hazeStreamWaitEvent`, `hazeDeviceSynchronize`) stay pure and are deliberately
+left un-instrumented.
+
 ## Project structure
 
 ```
@@ -667,9 +763,33 @@ niobium-haze/
 - **CUDA-like API by design** — Library authors targeting GPUs already think
   in `Malloc` / `Memcpy` / kernel calls. Haze preserves that shape so a CUDA
   FHE library can be retargeted to Niobium hardware by linking against `libhaze`
-  instead of `libcudart`. Streams, events, and graph capture are stubbed to
-  return success rather than removed, so porting code does not need to delete
-  every reference to `cudaStream_t`.
+  instead of `libcudart`. Stream and event handles are accepted as intentional
+  no-ops (they return success rather than being removed), so porting code does
+  not need to delete every reference to `cudaStream_t`. Graph capture, once a
+  no-op stub, is now implemented on top of the recording model (see the next
+  point).
+
+- **Graph capture, peer access, and performance counters** — Three CUDA-shaped
+  surfaces that previously returned `HAZE_ERROR_NOT_SUPPORTED` now carry real
+  behavior:
+  - **Graph capture** — `hazeStreamBeginCapture` / `hazeStreamEndCapture` and
+    `hazeGraphInstantiate` / `hazeGraphLaunch` / `hazeGraphExecUpdate` /
+    `hazeGraphExecDestroy` / `hazeGraphDestroy` implement the CUDA
+    record-once / replay-many contract: capture snapshots the recorded FHETCH
+    op sequence, instantiate prepares a replayable exec, and each launch
+    re-dispatches that snapshot with stable `DevAddr` operands.
+  - **Peer access** — `hazeDeviceEnablePeerAccess`, `hazeDeviceCanAccessPeer`,
+    and `hazeMemcpyPeerAsync` are implemented for the **simulator-representable**
+    peer topology only. Physical multi-chip validation on real hardware is
+    explicitly deferred as human follow-up and is not exercised by the default
+    test suite.
+  - **Performance counters** — `hazeGetPerformanceCounters` populates the
+    additive `hazePerformanceCounters` struct with op counts, bytes moved, and
+    flush timings.
+
+  The three documented no-ops — `hazeStreamSynchronize`, `hazeStreamWaitEvent`,
+  and `hazeDeviceSynchronize` — are unaffected and remain intentional no-ops by
+  design.
 
 - **Recording, not execution** — Every haze call appends to an in-memory
   FHETCH trace. Nothing executes until `hazeFlush()` dispatches the
