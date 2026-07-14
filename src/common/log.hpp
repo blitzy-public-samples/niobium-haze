@@ -22,8 +22,10 @@ namespace haze {
 // record_internal_error in errors.hpp instead).
 //
 // Output format: "[haze] [cid=<id>] <tag>: <body>\n", where <id> is the
-// current thread-local correlation id (0 when unset). Both tag and body are
-// printed verbatim; callers compose their own error text.
+// current thread-local correlation id (0 when unset). Callers compose their
+// own error text; <tag> and <body> are emitted as a single record with
+// control, DEL, and non-ASCII bytes escaped as "\xNN", so one call always
+// maps to exactly one line.
 void log_error(std::string_view tag, std::string_view body) noexcept;
 
 // As above, but stamps the line with an explicit correlation id instead of
