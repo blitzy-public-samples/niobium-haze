@@ -438,6 +438,23 @@ add_executable(haze_tests
   test/test_mrp_group_reuse.cpp
   test/test_replay_bridge_program_dir.cpp
   test/test_hardware_format.cpp
+  # Public-API backfill + error/edge-case hardening + feature tests. Unit cases
+  # run under haze_unit_tests; the [integration]-tagged cases run under
+  # haze_sim_tests; peer-access multi-chip cases carry Catch2's hidden [.] tag
+  # so the default suite stays green without physical multi-device hardware.
+  test/test_stream_event_lifecycle.cpp
+  test/test_async_ops.cpp
+  test/test_device_api.cpp
+  test/test_host_memory.cpp
+  test/test_introspection.cpp
+  test/test_documented_noops.cpp
+  test/test_error_paths.cpp
+  test/test_error_semantics.cpp
+  test/test_unflushed_reads.cpp
+  test/test_config_errors.cpp
+  test/test_graph_capture.cpp
+  test/test_peer_access.cpp
+  test/test_performance_counters.cpp
   # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
   # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.
   # `ops.cpp` is the shared per-mode operation library these tests build on.
