@@ -70,6 +70,15 @@ llvm_profdata="${LLVM_PROFDATA:-llvm-profdata}"
 llvm_cov="${LLVM_COV:-llvm-cov}"
 genhtml="${GENHTML:-genhtml}"
 
+# Reject a non-numeric threshold up front (before building/running anything).
+# The gate below coerces its operands with awk's `t + 0`, which turns any
+# non-numeric value (e.g. a typo like 8O) into 0 -- silently disabling the gate.
+# An empty COVERAGE_THRESHOLD is already caught by the ${VAR:-80} default above.
+if ! [[ $threshold =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    printf 'error: COVERAGE_THRESHOLD is not a non-negative number: %s\n' "$threshold" >&2
+    exit 2
+fi
+
 command -v "$llvm_profdata" >/dev/null 2>&1 || {
     printf 'error: %s not found (install the Clang/LLVM toolchain)\n' "$llvm_profdata" >&2
     exit 1
@@ -88,9 +97,16 @@ rm -rf "$coverage_dir"
 mkdir -p "$coverage_dir" "$runs_dir"
 
 printf '[coverage] running instrumented tests (%s)\n' "$(basename "$test_bin")"
+# Record a non-zero test exit but keep going so the coverage report is still
+# produced for diagnosis. The failure is NOT discarded: it is propagated at the
+# end (see the gate below) so a failing suite can never report a passing
+# coverage gate -- a failing run still flushes a valid profraw, so the export
+# and gate would otherwise succeed on untrustworthy data.
+test_failed=0
 if ! (cd "$runs_dir" && HAZE_TARGET="$haze_target" \
         LLVM_PROFILE_FILE="$coverage_dir/haze-%p.profraw" "$test_bin"); then
-    printf '[coverage] warning: test binary exited non-zero; coverage may be incomplete\n' >&2
+    printf '[coverage] warning: test binary exited non-zero; coverage result cannot be trusted\n' >&2
+    test_failed=1
 fi
 
 shopt -s nullglob
@@ -123,8 +139,20 @@ pct=$(awk -F: '
 
 if [[ $want_html -eq 1 ]]; then
     if command -v "$genhtml" >/dev/null 2>&1; then
-        "$genhtml" --quiet --output-directory "$coverage_dir/html" "$lcov_file"
-        printf '[coverage] HTML report: %s/html/index.html\n' "$coverage_dir"
+        # genhtml (lcov 2.x) is stricter than llvm-cov's lcov export and rejects
+        # it by default: it flags a lambda/local that llvm-cov reports as "not
+        # hit" while its line is hit as (inconsistent), and warns (unsupported)
+        # on function end-line derivation. --ignore-errors downgrades both to
+        # warnings so a report is still produced. The call is guarded so that a
+        # genhtml failure only skips the optional HTML report -- it must never
+        # abort the script before the coverage gate runs below.
+        if "$genhtml" --quiet --ignore-errors inconsistent,unsupported \
+                --output-directory "$coverage_dir/html" "$lcov_file"; then
+            printf '[coverage] HTML report: %s/html/index.html\n' "$coverage_dir"
+        else
+            printf '[coverage] warning: %s failed to render HTML report; skipping (coverage gate still runs)\n' \
+                "$genhtml" >&2
+        fi
     else
         printf '[coverage] warning: %s not found; skipping HTML report\n' "$genhtml" >&2
     fi
@@ -133,11 +161,22 @@ fi
 printf '[coverage] line coverage on %s: %s%% (threshold %s%%)\n' "$scope" "$pct" "$threshold"
 printf '[coverage] lcov tracefile: %s\n' "$lcov_file"
 
+gate_rc=0
 if awk -v p="$pct" -v t="$threshold" 'BEGIN { exit (p + 0 >= t + 0) ? 0 : 1 }'; then
     printf '[coverage] OK: %s%% >= %s%%\n' "$pct" "$threshold"
-    exit 0
 else
     printf '[coverage] FAIL: line coverage %s%% is below the %s%% threshold on %s\n' \
         "$pct" "$threshold" "$scope" >&2
+    gate_rc=1
+fi
+
+# A failing test suite must never yield a passing coverage run: a failing run can
+# still flush a valid profraw, so the gate above would otherwise report success
+# on data that cannot be trusted. Propagate the suite failure regardless of the
+# gate verdict.
+if [[ $test_failed -ne 0 ]]; then
+    printf '[coverage] FAIL: the instrumented test suite exited non-zero; coverage result is not trustworthy\n' >&2
     exit 1
 fi
+
+exit "$gate_rc"
