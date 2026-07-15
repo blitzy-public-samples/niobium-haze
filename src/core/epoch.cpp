@@ -18,13 +18,16 @@
 #include "core/allocator.hpp"
 #include "core/backend.hpp"
 #include "core/config.hpp"
+#include "core/metrics.hpp"
 #include "core/polynomial_io.hpp"
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <haze/replay_bridge.h>
 #include <ios>
 #include <niobium/compiler.h>
@@ -133,6 +136,9 @@ bool EpochState::is_input_locked(DevAddr addr) const noexcept {
 
 void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly,
                                              uint64_t modulus) noexcept {
+    // Per-op counter choke point: one increment per store (MRP fans out to one
+    // call per residue, so MRP ops count per-residue).
+    metrics().add_op();
     poly_map_.insert_or_assign(addr, std::move(poly));
     // This addr now holds a trace-produced value, not a live-in input.
     input_addrs_.erase(addr);
@@ -425,8 +431,15 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked(bool ru
 
     // Step 2: dispatch replay. kLocalTarget runs the in-process simulator;
     // other targets spawn nbcc_fhetch_replay over HTTP — both produce
-    // serialized_probes/<name>.ct for step 3 to read.
+    // serialized_probes/<name>.ct for step 3 to read. Time only this genuine
+    // replay dispatch and count the flush unconditionally (a failed replay is
+    // still a dispatched flush attempt).
+    const auto flush_start = std::chrono::steady_clock::now();
     const bool replay_ok = CompilerBackend::replay();
+    const auto flush_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::steady_clock::now() - flush_start)
+                              .count();
+    metrics().record_flush(static_cast<uint64_t>(flush_ns));
     if (!replay_ok) {
         clear_state_locked();
         record_internal_error(HazeInternalError::BackendReplayFailed,
@@ -486,6 +499,171 @@ void EpochState::clear_state_locked() noexcept {
     niobium::compiler().clear_captured();
 }
 
+void EpochState::begin_capture_locked() noexcept {
+    // Nested capture is a caller error; leave the in-progress capture intact.
+    if (capturing_) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "begin_capture_locked: capture already active");
+        return;
+    }
+    capturing_ = true;
+    // Open a recording for the capture region (no-op if one is already open,
+    // e.g. from a preceding H2D eager-tag).
+    ensure_recording_locked();
+}
+
+std::expected<EpochTraceSnapshot, HazeInternalError>
+EpochState::end_capture_snapshot_locked() noexcept {
+    // No active capture: nothing to end.
+    if (!capturing_) {
+        record_internal_error(HazeInternalError::SourceUnavailable,
+                              "end_capture_snapshot_locked: no active capture");
+        return std::unexpected(HazeInternalError::SourceUnavailable);
+    }
+    // Capture opened but nothing was recorded: mirror tag_output's
+    // empty-recording contract and leave capture mode cleanly.
+    if (!recording_) {
+        capturing_ = false;
+        clear_state_locked();
+        record_internal_error(HazeInternalError::SourceUnavailable,
+                              "end_capture_snapshot_locked: nothing recorded during capture");
+        return std::unexpected(HazeInternalError::SourceUnavailable);
+    }
+
+    // Snapshot the output binding table before any state is cleared; per-residue
+    // MRP outputs already carry individual entries in pending_outputs_.
+    std::vector<std::pair<DevAddr, std::string>> outputs(pending_outputs_.begin(),
+                                                         pending_outputs_.end());
+
+    // Tag pending SRP + MRP outputs, then write the self-contained project
+    // directory (.fhetch + inputs + templates + cryptocontext).
+    if (auto tagged = tag_pending_outputs_locked(); !tagged) {
+        capturing_ = false;
+        clear_state_locked();
+        return std::unexpected(tagged.error());
+    }
+    if (!CompilerBackend::stop_epoch()) {
+        capturing_ = false;
+        clear_state_locked();
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "end_capture_snapshot_locked (stop_epoch)");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+    if (hazeReplayBridgeTakeHookHadError() != 0) {
+        capturing_ = false;
+        clear_state_locked();
+        record_internal_error(
+            HazeInternalError::BridgeHookFailed,
+            "post_recording_hook reported per-input/output failures (see prior log entries)");
+        return std::unexpected(HazeInternalError::BridgeHookFailed);
+    }
+
+    // Copy the just-written project into a unique graph-owned directory so a
+    // later epoch overwriting the default project dir cannot disturb it. The
+    // suffix is unique per capture (steady-clock tick + a lock-held counter),
+    // which also keeps parallel processes from colliding under the temp dir.
+    std::filesystem::path graph_dir;
+    try {
+        const std::filesystem::path src_dir = niobium::compiler().get_program_directory();
+        if (!std::filesystem::exists(src_dir)) {
+            capturing_ = false;
+            clear_state_locked();
+            record_internal_error(HazeInternalError::SourceUnavailable,
+                                  "end_capture_snapshot_locked: project directory missing");
+            return std::unexpected(HazeInternalError::SourceUnavailable);
+        }
+        static uint64_t graph_seq = 0; // incremented under mutex_
+        const auto tick =
+            static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+        const std::string unique =
+            "haze_graph_" + std::to_string(tick) + "_" + std::to_string(graph_seq++);
+        graph_dir = std::filesystem::temp_directory_path() / unique;
+        std::filesystem::create_directories(graph_dir);
+        std::filesystem::copy(src_dir, graph_dir,
+                              std::filesystem::copy_options::recursive |
+                                  std::filesystem::copy_options::overwrite_existing);
+    } catch (...) {
+        capturing_ = false;
+        clear_state_locked();
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "end_capture_snapshot_locked: project directory copy failed");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+
+    // Dispatch a one-time in-process replay and read back each output's computed
+    // values (same read-back path as do_materialize_locked); these are re-applied
+    // to the output shadows on every replay_snapshot_locked launch.
+    const bool replay_ok = CompilerBackend::replay();
+    if (!replay_ok) {
+        capturing_ = false;
+        clear_state_locked();
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "end_capture_snapshot_locked (replay)");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+
+    std::vector<std::vector<uint64_t>> output_values;
+    output_values.reserve(outputs.size());
+    for (const auto &[addr, name] : outputs) {
+        fhetch::Polynomial result_poly;
+        if (!fhetch::result(name, result_poly)) {
+            capturing_ = false;
+            clear_state_locked();
+            std::ostringstream body;
+            body << "end_capture_snapshot_locked: result('" << name << "') unavailable for addr 0x"
+                 << std::hex << to_uintptr(addr) << std::dec;
+            record_internal_error(HazeInternalError::BackendOutputMissing, body.str().c_str());
+            return std::unexpected(HazeInternalError::BackendOutputMissing);
+        }
+        std::vector<uint64_t> values;
+        if (!extract_polynomial_values(result_poly, name, values)) {
+            capturing_ = false;
+            clear_state_locked();
+            std::ostringstream body;
+            body << "end_capture_snapshot_locked: failed to extract values for '" << name
+                 << "' at addr 0x" << std::hex << to_uintptr(addr) << std::dec;
+            record_internal_error(HazeInternalError::BackendOutputDecodeFailed, body.str().c_str());
+            return std::unexpected(HazeInternalError::BackendOutputDecodeFailed);
+        }
+        output_values.push_back(std::move(values));
+    }
+
+    EpochTraceSnapshot snapshot;
+    snapshot.project_dir = std::move(graph_dir);
+    snapshot.outputs = std::move(outputs);
+    snapshot.target = config().target();
+    snapshot.output_values = std::move(output_values);
+
+    clear_state_locked();
+    capturing_ = false;
+    return snapshot;
+}
+
+// NOLINTBEGIN(readability-convert-member-functions-to-static)
+std::expected<void, HazeInternalError>
+EpochState::replay_snapshot_locked(const EpochTraceSnapshot &snapshot) noexcept {
+    // Index-parallel invariant established by end_capture_snapshot_locked.
+    if (snapshot.outputs.size() != snapshot.output_values.size()) {
+        record_internal_error(HazeInternalError::BackendShapeMismatch,
+                              "replay_snapshot_locked: outputs / output_values size mismatch");
+        return std::unexpected(HazeInternalError::BackendShapeMismatch);
+    }
+    // Re-apply each cached value to its output shadow. A per-launch copy keeps
+    // the snapshot reusable; update_shadow runs under the epoch lock, preserving
+    // the epoch -> allocator lock order.
+    for (size_t i = 0; i < snapshot.outputs.size(); ++i) {
+        std::vector<uint64_t> values = snapshot.output_values[i];
+        if (auto r = allocator().update_shadow(snapshot.outputs[i].first, std::move(values)); !r)
+            return std::unexpected(r.error());
+    }
+    return {};
+}
+// NOLINTEND(readability-convert-member-functions-to-static)
+
+bool EpochState::capturing_locked() const noexcept {
+    return capturing_;
+}
+
 std::string EpochState::mrp_group_name_locked(bool output, DevAddr leading) {
     auto &names = output ? mrp_out_names_ : mrp_in_names_;
     if (auto it = names.find(leading); it != names.end())
@@ -504,6 +682,10 @@ std::expected<void, HazeInternalError> EpochState::tag_output(DevAddr addr) noex
 void EpochState::reset() noexcept {
     HazeLockGuard lock(mutex_);
     clear_state_locked();
+    // A device reset abandons any in-progress capture region and zeroes the
+    // performance counters.
+    capturing_ = false;
+    metrics().reset();
 }
 
 HazeMutex &EpochSession::init_then_get_mutex() noexcept {
@@ -542,11 +724,14 @@ std::expected<void, HazeInternalError> flush() noexcept {
 }
 
 std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,
-                                                             size_t /*count*/) noexcept {
+                                                             size_t count) noexcept {
     // D2D is a recorded pass-through copy; the source is already tagged (H2D
     // eager-tag or a prior compute), so the copy carries no real modulus.
     EpochSession session;
-    return epoch().copy_result_locked(dst, src);
+    auto result = epoch().copy_result_locked(dst, src);
+    if (result)
+        metrics().add_bytes_d2d(count);
+    return result;
 }
 
 std::expected<void, HazeInternalError> tag_h2d_input(DevAddr addr) noexcept {

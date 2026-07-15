@@ -13,6 +13,7 @@
 #include "core/device.hpp"
 
 #include "common/errors.hpp"
+#include "core/metrics.hpp"
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>
@@ -44,17 +45,25 @@ extern "C" hazeError_t hazeDeviceSynchronize() noexcept {
     return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazeDeviceEnablePeerAccess(int /*peer*/, unsigned int /*flags*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
+extern "C" hazeError_t hazeDeviceEnablePeerAccess(int peer, unsigned int flags) noexcept {
+    return set_internal_result(haze::device_enable_peer_access(peer, flags));
 }
 
-extern "C" hazeError_t hazeDeviceCanAccessPeer(int *can_access, int /*device*/,
-                                               int /*peer*/) noexcept {
+extern "C" hazeError_t hazeDeviceCanAccessPeer(int *can_access, int device, int peer) noexcept {
     if (can_access != nullptr)
         *can_access = 0;
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
+    if (can_access == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    auto result = haze::device_can_access_peer(device, peer);
+    if (!result)
+        return set_error(haze::to_public_error(result.error()));
+    *can_access = *result ? 1 : 0;
+    return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazeGetPerformanceCounters(void * /*counters*/) noexcept {
+extern "C" hazeError_t hazeGetPerformanceCounters(void *counters) noexcept {
+    if (counters == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    *static_cast<hazePerformanceCounters *>(counters) = haze::metrics().snapshot();
     return HAZE_SUCCESS;
 }

@@ -185,8 +185,11 @@ extern "C" hazeError_t hazeMemsetAsync(void *dev_ptr, int value, size_t count,
     return hazeMemset(dev_ptr, value, count);
 }
 
-extern "C" hazeError_t hazeMemcpyPeerAsync(void * /*dst*/, int /*dst_device*/, const void * /*src*/,
-                                           int /*src_device*/, size_t /*count*/,
+extern "C" hazeError_t hazeMemcpyPeerAsync(void *dst, int /*dst_device*/, const void *src,
+                                           int /*src_device*/, size_t count,
                                            hazeStream_t /*stream*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
+    if (dst == nullptr || src == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    return set_internal_result(
+        haze::copy_device_to_device(haze::to_dev_addr(dst), haze::to_dev_addr(src), count));
 }

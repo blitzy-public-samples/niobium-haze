@@ -64,12 +64,15 @@ TEST_CASE("graph API returns HAZE_ERROR_NOT_SUPPORTED", "[unit]") {
     hazeGetLastError();
 }
 
-TEST_CASE("multi-device stubs return HAZE_ERROR_NOT_SUPPORTED", "[unit]") {
+TEST_CASE("multi-device peer queries reject out-of-range ordinals", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // On the single-device simulator the only valid device ordinal is 0, so a
+    // peer ordinal of 1 is out of range and the implemented peer-access API
+    // reports HAZE_ERROR_INVALID_VALUE.
     int can_access = -1;
-    REQUIRE(hazeDeviceCanAccessPeer(&can_access, 0, 1) == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeDeviceCanAccessPeer(&can_access, 0, 1) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
-    REQUIRE(hazeDeviceEnablePeerAccess(1, 0) == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeDeviceEnablePeerAccess(1, 0) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 

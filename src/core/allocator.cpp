@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
+#include "core/metrics.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -278,6 +279,7 @@ std::expected<void, HazeInternalError> DeviceAllocator::copy_h2d(DevAddr dst, co
         shadow.assign(want_elems, uint64_t{0});
     }
     std::memcpy(reinterpret_cast<uint8_t *>(shadow.data()), src, count);
+    metrics().add_bytes_h2d(count);
     return {};
 }
 
@@ -316,6 +318,7 @@ std::expected<void, HazeInternalError> DeviceAllocator::copy_to_host(void *dst, 
         return std::unexpected(HazeInternalError::OutputNotFlushed);
     }
     std::memcpy(dst, reinterpret_cast<const uint8_t *>(data_it->second.data()), count);
+    metrics().add_bytes_d2h(count);
     return {};
 }
 

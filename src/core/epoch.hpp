@@ -44,6 +44,9 @@ struct EpochTraceSnapshot {
     std::filesystem::path project_dir;                    // graph-owned copy
     std::vector<std::pair<DevAddr, std::string>> outputs; // addr -> probe name
     std::string target;                                   // replay target
+    // Per-output computed values captured at snapshot time, index-parallel to
+    // `outputs`; re-applied to each output address's shadow on every replay.
+    std::vector<std::vector<uint64_t>> output_values;
 };
 
 // Singleton tracking the polymap, pending outputs, and recording flag for

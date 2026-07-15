@@ -18,6 +18,8 @@
 #include <cstring>
 #include <expected>
 #include <haze/haze_types.h>
+#include <set>
+#include <utility>
 
 namespace haze {
 
@@ -33,6 +35,15 @@ inline constexpr int kNumSupportedRingDims =
 
 // Single-device runtime: only one piece of mutable state.
 int g_active_device = 0;
+
+// Enabled peer-access pairs {from_device, to_device}: populated by
+// device_enable_peer_access and cleared by device_reset.
+std::set<std::pair<int, int>> g_enabled_peers;
+
+// A device index is valid when it lies within the current topology.
+bool valid_device(int d) noexcept {
+    return d >= 0 && d < device_count();
+}
 } // namespace
 
 int device_count() noexcept {
@@ -74,6 +85,29 @@ std::expected<void, HazeInternalError> device_fill_properties(hazeDeviceProp *pr
 
 void device_reset() noexcept {
     g_active_device = 0;
+    g_enabled_peers.clear();
+}
+
+std::expected<void, HazeInternalError> device_enable_peer_access(int peer,
+                                                                 unsigned int flags) noexcept {
+    if (flags != 0)
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    if (!valid_device(peer))
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    if (peer == device_active())
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    g_enabled_peers.insert({device_active(), peer});
+    return {};
+}
+
+std::expected<bool, HazeInternalError> device_can_access_peer(int device, int peer) noexcept {
+    if (!valid_device(device))
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    if (!valid_device(peer))
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    if (device == peer)
+        return false;
+    return true;
 }
 
 } // namespace haze
