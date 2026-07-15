@@ -56,7 +56,12 @@ column ties each decision to its work item or rule.
 | <a id="d-13"></a>D-13 | **Decouple reveal.js initialization from the Mermaid CDN load** so the deck comes up styled even when the diagram CDN is unreachable, and correct the earlier "opens offline" claim. | Keep the static top-level `import mermaid …` (any CDN miss aborts the whole module and reveal never initializes, leaving an unstyled vertical dump); bundle/inline Mermaid to make the deck truly offline (breaks the Rule 3 pinned-CDN mandate). | reveal.js and Lucide load via classic `<script>` tags and initialize first; Mermaid is then loaded with a dynamic `import()` inside `try/catch` after reveal init, so a diagram-CDN failure is confined and degrades to per-node captioned fallbacks instead of blanking the deck. The pinned Mermaid 11.4.0 URL is retained, honoring Rule 3's pinned-CDN mandate; the inaccurate "opens offline" wording is corrected to "requires network for pinned CDN assets; degrades gracefully offline". | Risk: diagrams are unavailable with no network. Mitigation: each `.mermaid` node is replaced with a styled fallback caption and stays hidden until processed, so no raw source flashes and no slide is blank; the deck remains fully navigable. | Rule 3 |
 | <a id="d-14"></a>D-14 | Render the slide-10 gauge center label and the slide-11 progress labels as **HTML (via `<foreignObject>` / flanking `<div>`s) rather than SVG `<text>`**. | Keep SVG `<text>` with `dominant-baseline`; only convert the unitless font-size to `px`. | SVG `<text>` mis-paints under reveal.js fractional transform scaling when the text is gradient-filled or sits in an extreme-aspect viewBox — the glyphs rasterize near their unscaled size and drift or clip (observed at narrow breakpoints). HTML inside `<foreignObject>` scales with the SVG viewBox exactly like the vector shapes, and a gradient applied via `background-clip:text` rasterizes correctly, so the label stays centered and crisp at every breakpoint. | Risk: `<foreignObject>` / `background-clip:text` are comparatively less common. Mitigation: both are well-supported in evergreen browsers; the result was verified by screenshot across 1920/1366/768/390 widths, since `getBoundingClientRect` reported correct geometry even while the raster was wrong. | Rule 3 |
 | <a id="d-15"></a>D-15 | Force reveal.js **scroll view onto the dark brand theme and disable its narrow-width auto-activation** (`scrollActivationWidth: null`). | Leave reveal.js defaults (scroll view auto-activates below ~435px with a white background); restyle only after detecting scroll view at runtime. | On a fresh narrow load reveal.js can open in scroll view, whose layers default to white in `reveal.css` and render the light brand text near-invisible (a contrast failure). Setting `scrollActivationWidth: null` keeps the deck in letterboxed slide view at every width, and dark-theme overrides on `.reveal-viewport` / `.scroll-page` / `.scroll-page-content` guarantee the brand background and legible text if scroll view is ever entered. | Risk: an additive config key plus a few `!important` overrides. Mitigation: the key is purely additive and the mandated config keys are untouched; contrast was re-verified via a Lighthouse audit with color-contrast passing. | Rule 3 |
-| <a id="d-16"></a>D-16 | **Emit each `log_error` diagnostic as a single composed line written with one `std::cerr` insertion** (line-atomic), superseding the original chained-`operator<<` emission recorded under [D-04](#d-04). | Keep the chained `std::cerr << … << … << '\n'` style (the original intent, which kept the allocation profile identical); serialize every emission behind a process-global `std::mutex`; use `std::osyncstream`; switch to `std::print` / `std::format`. | The chained style performs several independent insertions on the unit-buffered `std::cerr`; under concurrent multi-threaded logging those per-insertion writes interleave and garble lines, defeating the structured/parseable-diagnostics goal of Rule 2 and the checkpoint's explicit "line integrity, concurrency isolation" property (a controlled 8-thread × 400-message probe measured 3133/3200 lines malformed). Composing the whole `[haze] [cid=<id>] <tag>: <body>\n` line into one `std::string` and emitting it with a single insertion maps to one underlying per-stream stdio write, so lines no longer interleave (the same probe measured 0/3200 malformed after the change) while the emitted bytes and the 2-arg source-compatibility contract stay identical. A global mutex adds lock-ordering surface and contention to a `noexcept` sink; `std::osyncstream` / `std::print` / `std::format` add the include and allocation churn the original decision deliberately avoided — so the single-insertion approach fixes the defect with the smallest blast radius. | Risk: composing a `std::string` allocates, and an allocation failure inside a `noexcept` function would call `std::terminate`. Mitigation: the composition and single-shot write are wrapped so that on any allocation failure the sink falls back to an allocation-free direct write in the identical format, so `noexcept` holds and no exception can cross the C ABI boundary. The added `<string>` include is a standard-library header only; no new symbol is exported, so the symbol-leak audit is unaffected. | Rule 2 (refines [D-04](#d-04)) |
+| <a id="d-16"></a>D-16 | **Emit each `log_error` diagnostic as a single composed line written with one `std::fwrite` to `stderr`** (line-atomic), refining the correlation-ID logging recorded under [D-04](#d-04). | Perform several independent writes/insertions per record (one per field); serialize every emission behind a process-global `std::mutex`; use `std::osyncstream`; switch to `std::print` / `std::format`. | Composing the whole `[haze] [cid=<id>] <tag>: <body>\n` line into one `std::string` and emitting it with a single `std::fwrite(record.data(), 1, record.size(), stderr)` maps to one underlying stdio write, so records do not interleave under concurrent multi-threaded logging — satisfying the structured/parseable-diagnostics goal of Rule 2 and the checkpoint's "line integrity, concurrency isolation" property. Line integrity is additionally guaranteed deterministically by `append_escaped`, which replaces every newline, C0/C1 control, DEL, and non-ASCII byte in the tag and body with a printable `\xNN` (or `\\`) escape, so no field can inject a framing break; this escaping invariant is what the executable evidence in `test/test_documented_noops.cpp` verifies rather than a timing-dependent thread race. A global mutex adds lock-ordering surface and contention to a `noexcept` sink; `std::osyncstream` / `std::print` / `std::format` add include and allocation churn — so the single-`fwrite` approach fixes the defect with the smallest blast radius. | Risk: composing a `std::string` allocates, and an allocation failure inside a `noexcept` function would call `std::terminate`. Mitigation: the composition and single-shot write sit inside a `try/catch (...)` whose handler emits a fixed, allocation-free generic notice via `std::fputs("[haze] log sink dropped a record (formatting or write failure)\n", stderr)` — a dropped-record notice, not a re-emission of the formatted record — so `noexcept` holds and no exception can cross the C ABI boundary. The added `<string>` include is a standard-library header only; no new symbol is exported, so the symbol-leak audit is unaffected. | Rule 2 (refines [D-04](#d-04)) |
+| <a id="d-17"></a>D-17 | **Defer `test/test_allocator_limits.cpp` to a subsequent PR** rather than creating it in this test-specification checkpoint. | Author a placeholder allocator-limits TU now; fold its cases into `test/test_error_paths.cpp`. | The file was not part of the processed checkpoint and does not exist in the tree; per the per-PR delivery model (AAP §0.8.1) the P2e hardening is delivered incrementally, and the pool-exhaustion / zero / oversized boundary cases depend on allocator introspection best exercised alongside their own PR. Crediting a non-existent file in the traceability matrix would be a false coverage claim (the defect R3 flags), so it is instead recorded explicitly as deferred in both matrices. | Risk: the deferral could be read as dropped scope. Mitigation: it is tracked as an explicit deferral in §3.1/§3.2/§3.3 and called out as human follow-up in the PR description; the remaining eight hardening categories are delivered this checkpoint. | P2e (deferred) |
+| <a id="d-18"></a>D-18 | Deliver the **epoch/allocator lock-order concurrency test inside `test/test_error_paths.cpp` behind the hidden `[.][concurrency]` tag**, and scope it to independent per-thread allocation churn. | Put it in the deferred `test_allocator_limits.cpp`; drive concurrent op-recording through `compute`/`flush`; omit a lock-order test entirely (the R3 gap). | A concurrency test addressing the epoch->allocator lock-order surface (CWE-667/833) is delivered now so the hardening categories are not left without one. It uses a `std::barrier` to release eight threads simultaneously, each performing malloc->memset->free on thread-owned pointers, maximizing allocator-lock contention under TSan without violating the single-writer record-and-replay invariant. Deeper *nested* epoch->allocator ordering through concurrent op recording is deferred, because record-and-replay is single-writer by design and cannot record ops from multiple threads concurrently. The case sits behind `[.]` so it is opt-in (run under the sanitizer job) and does not perturb the default suite. | Risk: the test cannot exercise concurrent op recording. Mitigation: the single-writer limitation is documented here as a deviation from a literal "epoch/allocator lock-order under concurrency" reading; the delivered test still exercises the allocator lock under contention. | P2e |
+| <a id="d-19"></a>D-19 | **Smoke-test the three documented no-ops** (`hazeStreamSynchronize`, `hazeStreamWaitEvent`, `hazeDeviceSynchronize`) for `HAZE_SUCCESS` and, in addition, assert their **exclusion from telemetry** with executable evidence. | Assert only the return code; instrument the no-ops (prohibited by AAP §0.3.2). | The AAP forbids changing no-op behavior, so the tests assert `HAZE_SUCCESS` without modifying them; to satisfy the Observability requirement that the no-ops stay *uninstrumented*, `test/test_documented_noops.cpp` snapshots all seven performance counters and the thread-local correlation ID before and after the three calls and asserts every value is unchanged — turning "not instrumented" into a checked invariant rather than a claim. | Risk: none — the functions are unchanged. Mitigation: the evidence is read-only observation of the public counter surface and the correlation getter. | P2d, Rule 2 |
+| <a id="d-20"></a>D-20 | Prove **no C++ exception crosses the `noexcept` C ABI boundary using a fork-subprocess death-test** in `test/test_error_semantics.cpp`. | `REQUIRE_NOTHROW` around the ABI calls (cannot observe a `noexcept` violation — the process has already `std::terminate`d); add a throw-injection seam to the sink. | `errors.hpp` exposes no throw-injection seam, and a throw escaping a `noexcept` function calls `std::terminate` before any in-process matcher can react, so `REQUIRE_NOTHROW` gives false assurance (the ES1 defect). The child process drives eight pathological `noexcept`-ABI calls with pinned error codes and `_exit(rc)`; the parent asserts `WIFEXITED` and `WEXITSTATUS==0`, so a `std::terminate` would surface as an abnormal child exit and fail the test deterministically. | Risk: fork-based tests are POSIX-only. Mitigation: the supported platforms are all POSIX (x86_64/aarch64 Linux, aarch64 Darwin); the wait-status macros are annotated with the repo-standard `// NOLINTNEXTLINE(misc-include-cleaner)` precedent. | P2e |
+| <a id="d-21"></a>D-21 | Write `test/test_config_errors.cpp` against the **actual `Config::set_modulus` sparse-write/contiguity + post-configure-immutability contract**, deviating from the review's suggested "assert index 64 is rejected after populating 0–63". | Implement the reviewer's literal suggestion (assert a hard 64-index cap). | An empirical probe proved `Config::set_modulus` enforces only `idx>=0`, `modulus!=0`, contiguity (`idx>size` gap -> `INVALID_VALUE`; `idx==size` append; `idx<size` overwrite), and post-`configureDevice` immutability (a differing value or new index -> `NotConfigured`/`CONFIGERR`); it has **no** hard 64-index cap. Filling slots 0–63 and then writing index 64 (and 65) *succeeds*. The `kMaxCiphertextModuli=64` limit applies to MRP *allocation count*, not to `set_modulus`. Asserting a nonexistent cap would test a false contract, so the test exercises the real one. | Risk: the test diverges from the review's literal wording. Mitigation: this deviation is logged per Rule 1 with the probe evidence; the real contiguity/immutability contract is exercised across eleven cases, which is stronger than the single-bound assertion originally suggested. | P2e |
 
 ## 3. Traceability matrix
 
@@ -76,7 +81,7 @@ target paths from the Agent Action Plan file-transformation mapping.
 | P2b | Performance counters | `include/haze/haze_types.h`, `src/api/device.cpp`, `src/core/metrics.hpp`, `src/core/metrics.cpp`, `src/core/epoch.cpp`, `src/core/allocator.cpp`, `include/haze/haze.h` | `test/test_performance_counters.cpp` |
 | P2c | Coverage measurement + 80% gate | `CMakeLists.txt`, `Makefile`, `scripts/coverage.sh`, `flake.nix`, `.github/workflows/coverage.yml` | CI coverage job enforces 80% line coverage on `src/core/` + `src/api/` |
 | P2d | Backfill tests for the remaining public functions | `CMakeLists.txt` (test registration) | `test/test_stream_event_lifecycle.cpp`, `test/test_async_ops.cpp`, `test/test_device_api.cpp`, `test/test_host_memory.cpp`, `test/test_introspection.cpp`, `test/test_documented_noops.cpp` |
-| P2e | Error-path and edge-case hardening | `CMakeLists.txt` (test registration), `.github/workflows/sanitizers.yml` | `test/test_error_paths.cpp`, `test/test_unflushed_reads.cpp`, `test/test_allocator_limits.cpp`, `test/test_error_semantics.cpp`, `test/test_config_errors.cpp` (run under ASan/UBSan/TSan) |
+| P2e | Error-path and edge-case hardening | `CMakeLists.txt` (test registration), `.github/workflows/sanitizers.yml` | Delivered this checkpoint: `test/test_error_paths.cpp` (includes the epoch/allocator lock-order concurrency test under the `[.][concurrency]` tag — see [D-18](#d-18)), `test/test_unflushed_reads.cpp`, `test/test_error_semantics.cpp`, `test/test_config_errors.cpp`. Deferred: `test/test_allocator_limits.cpp` (not created this checkpoint — see [D-17](#d-17)). Sanitizer runs (ASan/UBSan/TSan) execute in CI once the files are registered. |
 | P3a | Complete CONTRIBUTING with a marked CLA placeholder | `CONTRIBUTING.md` | Markdown review; internal and external links resolve |
 | P3b | `docs/` + `examples/`; keep docs-as-tests green | `docs/index.md`, `docs/architecture.md`, `docs/building.md`, `docs/testing.md`, `examples/quickstart.c`, `examples/ckks22.cpp`, `examples/README.md`, `examples/CMakeLists.txt`, `README.md`, `scripts/test_readme_examples.sh` | `scripts/test_readme_examples.sh` (docs-as-tests CI) |
 | Rule 1 | Explainability: decision log + traceability | `docs/decision-log.md` | This document; the coverage assertion in [section 3.3](#33-coverage-assertion) |
@@ -112,7 +117,8 @@ target paths from the Agent Action Plan file-transformation mapping.
 | `test/test_peer_access.cpp` | P2a | Peer tests behind a hardware-gated tag. |
 | `test/test_performance_counters.cpp` | P2b | Assert non-zero counters after a workload. |
 | `test/test_stream_event_lifecycle.cpp`, `test/test_async_ops.cpp`, `test/test_device_api.cpp`, `test/test_host_memory.cpp`, `test/test_introspection.cpp`, `test/test_documented_noops.cpp` | P2d | Backfill coverage for the remaining public functions and documented no-op smoke tests. |
-| `test/test_error_paths.cpp`, `test/test_unflushed_reads.cpp`, `test/test_allocator_limits.cpp`, `test/test_error_semantics.cpp`, `test/test_config_errors.cpp` | P2e | Negative and boundary tests across the nine hardening categories. |
+| `test/test_error_paths.cpp`, `test/test_unflushed_reads.cpp`, `test/test_error_semantics.cpp`, `test/test_config_errors.cpp` | P2e | Negative and boundary tests across eight of the nine hardening categories; `test_error_paths.cpp` also carries the epoch/allocator lock-order concurrency test behind the hidden `[.][concurrency]` tag (see [D-18](#d-18)). |
+| `test/test_allocator_limits.cpp` | P2e (deferred) | Allocator pool-exhaustion / zero / oversized boundary tests — **not created this checkpoint**; deferred to a subsequent PR (see [D-17](#d-17)). |
 | `CONTRIBUTING.md` | P3a | Full contributor guidelines with a clearly marked CLA placeholder. |
 | `README.md` | P3b | Add graph/peer/counter status, benchmarking, coverage, and observability sections; link `docs/` and `examples/`. |
 | `docs/index.md`, `docs/architecture.md`, `docs/building.md`, `docs/testing.md` | P3b | New documentation tree. |
@@ -124,12 +130,58 @@ target paths from the Agent Action Plan file-transformation mapping.
 
 ### 3.3 Coverage assertion
 
-This matrix is **100%-covering**: every Agent Action Plan work item (P1a, P1b,
-P2a, P2b, P2c, P2d, P2e, P3a, P3b) and every rule (Rules 1–3) appears in the
-forward matrix, and every created or modified in-scope file group appears in the
-backward matrix. The three documented no-ops (`hazeStreamSynchronize`,
-`hazeStreamWaitEvent`, `hazeDeviceSynchronize`) are the only intentionally
-excluded functions and are recorded above as out-of-scope, smoke-tested only.
+**Scope of this assertion.** The forward and backward matrices above are
+**plan-level** maps: every Agent Action Plan work item (P1a, P1b, P2a, P2b, P2c,
+P2d, P2e, P3a, P3b) and every rule (Rules 1–3) appears in the forward matrix,
+and every planned in-scope file group appears in the backward matrix. That
+plan-level mapping is complete; it is **not** a claim that every work item is
+*delivered* in this checkpoint. Per the per-PR delivery model (AAP §0.8.1), this
+checkpoint is a **test-specification milestone**: it lands the Catch2
+translation units as source-ready specifications, while the runtime, build, and
+CI work they will eventually exercise is delivered incrementally in later PRs.
+The earlier unqualified "100%-covering" wording is withdrawn because it did not
+distinguish plan coverage from delivered coverage and is not true at the
+semantic-requirement (per-test-case) level; §3.4 gives the delivered
+per-test-case detail.
+
+**Delivered in this checkpoint:** the thirteen new `test/*.cpp` translation
+units plus the byte-exact revert of `test/test_build.cpp` and `CMakeLists.txt`
+to the parent baseline. **Deferred to subsequent PRs** (each tracked by a
+decision entry): the graph/peer/counter *runtime* (P1a/P2a/P2b implementation
+files such as `src/core/graph.*` and `src/core/metrics.*`, which do not yet
+exist), the benchmark harness and its gate (P1b), the coverage instrumentation
+and 80% gate (P2c), the new CI workflows, and the `test/test_allocator_limits.cpp`
+translation unit (P2e). None of these deferrals are silently credited above:
+`test_allocator_limits.cpp` is explicitly marked *deferred* in both matrices,
+and the runtime files are listed as *targets* rather than as delivered artifacts.
+
+**Intentional exclusions.** The three documented no-ops
+(`hazeStreamSynchronize`, `hazeStreamWaitEvent`, `hazeDeviceSynchronize`) are the
+only intentionally excluded *functions* and are recorded above as out-of-scope,
+smoke-tested only (see [D-19](#d-19)).
+
+### 3.4 Delivered per-test-case coverage (test-specification checkpoint)
+
+This section records the requirement/test-case granularity R3 requires for the
+translation units actually delivered in this checkpoint. Each row names the
+specific semantic requirement each file exercises so coverage can be audited at
+the test-case level rather than only at the file level.
+
+| Delivered test file | Semantic requirements exercised (per-case intent) |
+|---------------------|---------------------------------------------------|
+| `test/test_graph_capture.cpp` | Begin/end-capture state machine (nested-begin rejected `INVALID_VALUE`; end-without-begin `INVALID_VALUE` distinct from empty-capture `SOURCE_UNAVAILABLE`); instantiate/launch/update/destroy lifetime; same-topology update relaunches and changes results; genuine topology-mismatch rejection; exhaustive per-arg null/invalid/destroyed-handle validation with output-zeroing, last-error, and state recovery. Asserts the **final implemented** contract (runtime deferred). |
+| `test/test_peer_access.cpp` | query -> enable -> authorization contract; disabled/enabled states; negative and out-of-range device/copy ordinals; simulator peer copy (tag/materialize/D2H/byte-compare); hardware readback behind the hidden `[.]` tag. Asserts the **final implemented** contract (runtime deferred). |
+| `test/test_performance_counters.cpp` | Exact before/after deltas per op (not `>=`); one-flush `flush_count==1` and `total==last`; two-flush exact totals; `offsetof` layout assertions for all seven fields; dirty-then-reset; failed-op no-delta; `hazeWriteProgram` no-flush. Asserts the **final implemented** contract (runtime deferred). |
+| `test/test_stream_event_lifecycle.cpp` | Nonzero-flag contract; direct null-output rejection for `*WithPriority`/`*WithFlags`; null-handle destroy/record. |
+| `test/test_async_ops.cpp` | Default-stream malloc/free/memset; invalid source/kind/size paths; allocator-only `[unit]` retag. |
+| `test/test_device_api.cpp` | `GetDeviceCount`/`SetDevice`/`GetDevice`/`GetDeviceProperties`; negative-device properties output + last-error. |
+| `test/test_host_memory.cpp` | `HostAlloc`/`FreeHost` acceptance contract; safe negative paths; post-free reclassification. |
+| `test/test_introspection.cpp` | `PointerGetAttributes` exact fields/device association; null and post-free classification; MRP device-classification. |
+| `test/test_documented_noops.cpp` | The three no-ops return `HAZE_SUCCESS` without behavior change; **executable observability evidence** — all seven counters and the correlation ID are snapshotted before/after the no-ops and asserted unchanged, and a composed log line is asserted single-line and escaped (Rule 2, see [D-16](#d-16)). |
+| `test/test_error_paths.cpp` | Null/invalid handles, use-after-free, double-free, wrong allocator with correctly-sized buffers and a sentinel-unchanged assertion; the epoch/allocator lock-order concurrency test under `[.][concurrency]` (see [D-18](#d-18)). |
+| `test/test_unflushed_reads.cpp` | `NOT_FLUSHED` before flush; correct readback after tag+flush; device-vs-shadow pointer classification. |
+| `test/test_error_semantics.cpp` | Explicit 18-entry `{internal, expected_public}` mapping asserted for exact equality; a fork-subprocess death-test proving no C++ exception crosses the `noexcept` C ABI boundary (see [D-20](#d-20)). |
+| `test/test_config_errors.cpp` | The **actual** sparse-write/contiguity + post-configure-immutability contract of `Config::set_modulus` (see [D-21](#d-21)); ring-dim/device configuration errors. |
 
 
 ## 4. Deviations and assumptions
@@ -162,13 +214,53 @@ linked to its decision-table entry, per Rule 1.
   reveal.js initialization is decoupled from the Mermaid CDN so a diagram-CDN
   outage degrades to captioned fallbacks rather than blanking the deck. See
   [D-13](#d-13).
-- **Diagnostic lines are composed then emitted with one insertion.** The
-  original logging intent kept the chained `std::cerr << …` emission with an
-  identical allocation profile; that style interleaves under concurrent
-  multi-threaded logging, so each line is instead composed into a single
-  `std::string` and written with one insertion to satisfy the line-integrity /
-  concurrency-isolation property of Rule 2, with an allocation-free fallback
-  preserving `noexcept`. See [D-16](#d-16).
+- **Diagnostic lines are composed then emitted with one `std::fwrite`.** Rather
+  than performing several independent per-field writes (which would interleave
+  under concurrent multi-threaded logging), each record is composed into a
+  single `std::string` and written with one `std::fwrite(..., stderr)` to
+  satisfy the line-integrity / concurrency-isolation property of Rule 2. Field
+  contents are neutralized deterministically by `append_escaped` (newlines,
+  control bytes, and non-ASCII rendered as `\xNN`), so framing integrity does
+  not depend on a timing-sensitive thread race. On any formatting/write failure
+  the `catch (...)` handler emits a fixed, allocation-free generic dropped-record
+  notice via `std::fputs` — not a re-emission of the record — preserving
+  `noexcept`. See [D-16](#d-16).
+- **Peer access is simulator-only and validates device ordinals.** Physical
+  multi-chip peer transfer needs hardware absent from CI, so only the
+  simulator-representable query -> enable -> copy path is implemented, and the
+  peer entry points validate device ordinals (rejecting negative and
+  out-of-range indices) rather than accepting them unchecked as the superseded
+  comment implied. Hardware-only assertions sit behind a hidden tag and the
+  multi-chip step is flagged as human follow-up. See [D-09](#d-09).
+- **`test/test_config_errors.cpp` exercises the real `set_modulus` contract, not a
+  nonexistent index cap.** A literal reading of the review suggested asserting
+  that index 64 is rejected after populating 0–63; an empirical probe proved
+  `Config::set_modulus` has no hard 64-index cap (writing 64 and 65 succeeds
+  after a contiguous fill), so the test exercises the actual sparse-write /
+  contiguity / post-configure-immutability contract instead. See [D-21](#d-21).
+- **`test/test_allocator_limits.cpp` is deferred.** The allocator pool-exhaustion
+  / zero / oversized boundary TU was not part of the processed checkpoint and is
+  deferred to a subsequent PR rather than credited as delivered. See
+  [D-17](#d-17).
+- **The lock-order concurrency test is scoped to independent per-thread
+  allocation churn.** A literal "epoch/allocator lock-order under concurrent op
+  recording" test is not expressible because record-and-replay is single-writer,
+  so the delivered `[.][concurrency]` test in `test/test_error_paths.cpp`
+  exercises the allocator lock under eight-thread contention while the nested
+  epoch-path ordering is documented as deferred. See [D-18](#d-18).
+- **The no-exception-across-the-ABI proof uses a fork death-test.** Because a
+  throw escaping a `noexcept` function terminates the process before any
+  in-process matcher can observe it, `REQUIRE_NOTHROW` cannot prove the property;
+  a fork-subprocess death-test is used instead. See [D-20](#d-20).
+- **White-box test access is used only where a public getter does not exist.**
+  The public C ABI intentionally exposes no state getters, so a few tests reach
+  internal `haze::` symbols (for example `haze::to_public_error` for the ES2
+  mapping table, and the `AllocatorTestAccess` helper already used by the
+  baseline `test/test_memory.cpp` for MRP-allocation negatives). This is a
+  deliberate white-box choice for assertions that have no black-box surface;
+  MRP-allocation negative cases remain owned by `test/test_memory.cpp` and are
+  not duplicated in the new introspection tests.
+
 
 ### 4.2 Assumptions
 

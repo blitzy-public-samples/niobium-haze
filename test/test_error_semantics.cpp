@@ -6,7 +6,10 @@
 #include <haze/haze.h>       // IWYU pragma: keep
 #include <haze/haze_types.h> // IWYU pragma: keep
 #include <string_view>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <thread>
+#include <unistd.h>
 
 TEST_CASE("error semantics: the last error clears after being read", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
@@ -63,52 +66,102 @@ TEST_CASE("error semantics: an unknown error code yields a stable non-null fallb
     REQUIRE(std::string_view(message) == "unknown error");
 }
 
-TEST_CASE("error semantics: every internal error variant maps to a defined public code", "[unit]") {
+TEST_CASE("error semantics: each internal error variant maps to its exact public code", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     using haze::HazeInternalError;
-    const HazeInternalError variants[] = {
-        HazeInternalError::InvalidArgument,
-        HazeInternalError::NotConfigured,
-        HazeInternalError::UnknownAddress,
-        HazeInternalError::NoData,
-        HazeInternalError::AllocTooSmall,
-        HazeInternalError::BackendInitFailed,
-        HazeInternalError::BackendReplayFailed,
-        HazeInternalError::BackendShapeMismatch,
-        HazeInternalError::MrpGroupAddrModuliMismatch,
-        HazeInternalError::MissingPolyMapBinding,
-        HazeInternalError::ShadowSizeMismatch,
-        HazeInternalError::BackendOutputMissing,
-        HazeInternalError::BackendOutputDecodeFailed,
-        HazeInternalError::BridgeHookFailed,
-        HazeInternalError::PoolMapDesync,
-        HazeInternalError::SourceUnavailable,
-        HazeInternalError::OutputNotFlushed,
-        HazeInternalError::UnsupportedDataFormat,
+
+    // The expected column mirrors the authoritative switch in
+    // src/common/errors.cpp to_public_error(); an incorrect mapping now fails
+    // the exact-equality REQUIRE instead of being accepted as "some defined
+    // code". All eighteen variants are listed so a new variant that is added
+    // without a mapping will not compile past the static_assert below.
+    struct Mapping {
+        HazeInternalError internal;
+        hazeError_t expected_public;
     };
-    static_assert(sizeof(variants) / sizeof(variants[0]) == 18U,
+    const Mapping table[] = {
+        {.internal = HazeInternalError::InvalidArgument,
+         .expected_public = HAZE_ERROR_INVALID_VALUE},
+        {.internal = HazeInternalError::NotConfigured, .expected_public = HAZE_ERROR_CONFIGERR},
+        {.internal = HazeInternalError::UnknownAddress,
+         .expected_public = HAZE_ERROR_UNKNOWN_ADDRESS},
+        {.internal = HazeInternalError::NoData, .expected_public = HAZE_ERROR_NO_DATA},
+        {.internal = HazeInternalError::AllocTooSmall,
+         .expected_public = HAZE_ERROR_ALLOC_TOO_SMALL},
+        {.internal = HazeInternalError::BackendInitFailed, .expected_public = HAZE_ERROR_INTERNAL},
+        {.internal = HazeInternalError::BackendReplayFailed,
+         .expected_public = HAZE_ERROR_INTERNAL},
+        {.internal = HazeInternalError::BackendShapeMismatch,
+         .expected_public = HAZE_ERROR_INTERNAL},
+        {.internal = HazeInternalError::MrpGroupAddrModuliMismatch,
+         .expected_public = HAZE_ERROR_INTERNAL},
+        {.internal = HazeInternalError::MissingPolyMapBinding,
+         .expected_public = HAZE_ERROR_INTERNAL},
+        {.internal = HazeInternalError::ShadowSizeMismatch, .expected_public = HAZE_ERROR_INTERNAL},
+        {.internal = HazeInternalError::BackendOutputMissing,
+         .expected_public = HAZE_ERROR_INTERNAL},
+        {.internal = HazeInternalError::BackendOutputDecodeFailed,
+         .expected_public = HAZE_ERROR_INTERNAL},
+        {.internal = HazeInternalError::BridgeHookFailed, .expected_public = HAZE_ERROR_INTERNAL},
+        {.internal = HazeInternalError::PoolMapDesync, .expected_public = HAZE_ERROR_INTERNAL},
+        {.internal = HazeInternalError::SourceUnavailable,
+         .expected_public = HAZE_ERROR_SOURCE_UNAVAILABLE},
+        {.internal = HazeInternalError::OutputNotFlushed,
+         .expected_public = HAZE_ERROR_NOT_FLUSHED},
+        {.internal = HazeInternalError::UnsupportedDataFormat,
+         .expected_public = HAZE_ERROR_NOT_SUPPORTED},
+    };
+    static_assert(sizeof(table) / sizeof(table[0]) == 18U,
                   "all 18 HazeInternalError variants must be enumerated");
-    for (const HazeInternalError variant : variants) {
-        const hazeError_t pub = haze::to_public_error(variant);
+    for (const Mapping &entry : table) {
+        const hazeError_t pub = haze::to_public_error(entry.internal);
+        REQUIRE(pub == entry.expected_public);
         REQUIRE(hazeGetErrorString(pub) != nullptr);
-        REQUIRE((pub == HAZE_SUCCESS || pub == HAZE_ERROR_INVALID_VALUE ||
-                 pub == HAZE_ERROR_OUT_OF_MEMORY || pub == HAZE_ERROR_NOT_SUPPORTED ||
-                 pub == HAZE_ERROR_CONFIGERR || pub == HAZE_ERROR_UNKNOWN_ADDRESS ||
-                 pub == HAZE_ERROR_NO_DATA || pub == HAZE_ERROR_ALLOC_TOO_SMALL ||
-                 pub == HAZE_ERROR_SOURCE_UNAVAILABLE || pub == HAZE_ERROR_NOT_FLUSHED ||
-                 pub == HAZE_ERROR_INTERNAL));
     }
 }
 
 TEST_CASE("error semantics: invalid arguments never throw across the C ABI", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE_NOTHROW([] {
-        (void)hazeMalloc(nullptr, 0);
-        (void)hazeFree(nullptr);
-        (void)hazeMemcpy(nullptr, nullptr, 0, HAZE_MEMCPY_HOST_TO_DEVICE);
-        (void)hazeGetDeviceProperties(nullptr, 99);
-        (void)hazeTagOutput(nullptr);
-        (void)hazeGraphDestroy(nullptr);
-    }());
-    (void)hazeGetLastError();
+    // REQUIRE_NOTHROW cannot observe an exception crossing a noexcept C ABI
+    // function: the runtime calls std::terminate before any handler runs, so a
+    // same-process check would abort the whole test binary instead of failing
+    // one assertion. Fork instead, drive a battery of pathological inputs
+    // through the noexcept ABI in the child, and require the child to exit
+    // normally with status 0. A non-zero status means a translated error code
+    // was wrong; abnormal termination (WIFEXITED false) means an exception
+    // escaped and std::terminate fired.
+    const pid_t pid = fork();
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        int rc = 0;
+        if (hazeDeviceReset() != HAZE_SUCCESS) {
+            rc = 2;
+        } else if (hazeMalloc(nullptr, 0) != HAZE_ERROR_INVALID_VALUE) {
+            rc = 3;
+        } else if (hazeMalloc(nullptr, 32768) != HAZE_ERROR_INVALID_VALUE) {
+            rc = 4;
+        } else if (hazeFree(nullptr) != HAZE_SUCCESS) {
+            rc = 5;
+        } else if (hazeMemcpy(nullptr, nullptr, 0, HAZE_MEMCPY_HOST_TO_DEVICE) !=
+                   HAZE_ERROR_INVALID_VALUE) {
+            rc = 6;
+        } else if (hazeGetDeviceProperties(nullptr, 99) != HAZE_ERROR_INVALID_VALUE) {
+            rc = 7;
+        } else if (hazeTagOutput(nullptr) != HAZE_ERROR_INVALID_VALUE) {
+            rc = 8;
+        } else if (hazeHostAlloc(nullptr, 4096, 0) != HAZE_ERROR_INVALID_VALUE) {
+            rc = 9;
+        }
+        _exit(rc);
+    }
+    int status = 0;
+    REQUIRE(waitpid(pid, &status, 0) == pid);
+    // WIFEXITED / WEXITSTATUS are provided by <sys/wait.h>; include-cleaner
+    // attributes the glibc macros to <bits/waitstatus.h>, so its misattribution
+    // is suppressed here in the same way the rest of the tree does for POSIX.
+    // NOLINTNEXTLINE(misc-include-cleaner)
+    const bool exited_normally = WIFEXITED(status);
+    // NOLINTNEXTLINE(misc-include-cleaner)
+    const int exit_code = exited_normally ? WEXITSTATUS(status) : -1;
+    REQUIRE(exited_normally);
+    REQUIRE(exit_code == 0);
 }

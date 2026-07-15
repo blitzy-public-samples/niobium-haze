@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Haze (libhaze) — Executive Summary</title>
-  <meta name="description" content="Executive summary of the Haze (libhaze) initiative: advancing a C++23 record-and-replay runtime with a CUDA-shaped C ABI for the Niobium FHE accelerator into a benchmarked, coverage-gated, documented library.">
+  <meta name="description" content="Executive summary of the Haze (libhaze) initiative: advancing a C++23 record-and-replay runtime with a CUDA-shaped C ABI for the Niobium FHE accelerator toward a benchmarked, coverage-gated, documented library.">
 
   <!-- Pinned reveal.js 5.1.0 structural stylesheets (layout only; Blitzy theme is inline below) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reset.css">
@@ -46,10 +46,7 @@
     }
 
     html, body, .reveal { background: var(--bg); }
-    /* Keep reveal.js scroll view on the dark brand theme. Scroll view can auto-activate on narrow
-       fresh loads (see decision log D-15); its layers default to white in reveal.css, which would
-       render the light body text near-invisible. These overrides guarantee the dark background and
-       legible text regardless of whether the deck opens in slide or scroll view. */
+    /* Dark brand background and light text for reveal.js scroll-view layers. Rationale: decision log D-15. */
     .reveal-viewport,
     .reveal-viewport.reveal-scroll,
     .reveal-viewport .scroll-page,
@@ -218,15 +215,12 @@
     .svg-chart { width: 100%; height: auto; display: block; }
     .svg-chart text { font-family: var(--font-main); fill: var(--muted); }
     .svg-chart .bar-label { fill: var(--text); font-size: 22px; }
-    /* Slide 10 gauge center label: HTML inside <foreignObject> (see decision log D-14). Scales with
-       the SVG viewBox exactly like the ring, and the gradient is applied via .grad-text
-       background-clip so it rasterizes correctly under reveal.js fractional transform scaling. */
+    /* Slide 10 gauge center label: HTML inside <foreignObject>; gradient via .grad-text background-clip. Rationale: decision log D-14. */
     .gauge-center { width: 300px; height: 300px; display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 2px; text-align: center; font-family: var(--font-main); }
     .gauge-center .gauge-num { font-size: 72px; font-weight: 800; line-height: 1; }
     .gauge-center .gauge-cap { font-size: 20px; color: var(--muted); line-height: 1.1; }
-    /* Slide 11 progress labels: rendered as flanking HTML (see decision log D-14) rather than SVG
-       <text>, which mis-paints in the extreme 1000x92 viewBox under fractional transform scaling. */
+    /* Slide 11 progress labels: flanking HTML rather than SVG <text>. Rationale: decision log D-14. */
     .prog-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; font-family: var(--font-main); }
     .prog-row .prog-l { font-size: 22px; color: var(--muted); }
     .prog-row .prog-r { font-size: 22px; color: var(--text); }
@@ -278,9 +272,7 @@
     /* Mermaid containment so diagrams fit the 1080px canvas */
     .reveal .mermaid { display: flex; justify-content: center; }
     .reveal .mermaid svg { max-width: 100% !important; height: auto !important; max-height: 820px; }
-    /* Mermaid diagrams load from a pinned CDN as a best-effort enhancement (see decision log D-13).
-       A node stays hidden until it is rendered or replaced with a fallback caption, so no raw
-       diagram source ever flashes and no slide is left blank when the CDN is unreachable. */
+    /* Mermaid loads from a pinned CDN; unprocessed nodes stay hidden until rendered or given a fallback caption. Rationale: decision log D-13. */
     .reveal .mermaid:not([data-processed]) { visibility: hidden; }
     .mermaid-fallback {
       display: flex; align-items: center; justify-content: center;
@@ -322,7 +314,7 @@
               <span class="icon-chip lg"><i data-lucide="cpu"></i></span>
             </div>
             <h1 style="margin:22px 0 10px;">Haze <span class="grad-text">(libhaze)</span></h1>
-            <p class="lead" style="font-size:32px;max-width:1200px;margin:0 auto;">From stubbed shim to a benchmarked, coverage-gated, documented runtime</p>
+            <p class="lead" style="font-size:32px;max-width:1200px;margin:0 auto;">From stubbed shim toward a benchmarked, coverage-gated, documented runtime</p>
             <div class="hero-rule"></div>
           </div>
           <div class="chip-row">
@@ -391,10 +383,10 @@ graph LR
       <!-- Slide 4: The initiative / goals -->
       <section>
         <p class="eyebrow"><span class="accent">The Initiative</span> · Goals</p>
-        <h2 class="slide-title">Advance libhaze from partially-stubbed to fully-realized</h2>
+        <h2 class="slide-title">Advance libhaze from partially-stubbed toward fully-realized</h2>
         <p class="lead muted" style="margin-bottom:26px;">Implement features, add benchmarking, gate coverage, and complete documentation — without changing the public C ABI, the record-and-replay architecture, the symbol-leak isolation, or the three intentional no-ops.</p>
         <div class="tile-grid cols-4">
-          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="blocks"></i></span><h3>Feature completion</h3></div><p>Graph capture, peer access, and performance counters implemented where the model permits.</p></div>
+          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="blocks"></i></span><h3>Feature completion</h3></div><p>Graph capture, peer access, and performance counters — planned where the record-and-replay model permits.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="gauge"></i></span><h3>Benchmarking</h3></div><p>A Google Benchmark harness with a CI regression gate.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="shield-check"></i></span><h3>Coverage gate</h3></div><p>An 80% line-coverage threshold on the core and API layers.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="book-open"></i></span><h3>Docs &amp; examples</h3></div><p>A documentation tree plus runnable examples.</p></div>
@@ -409,10 +401,10 @@ graph LR
         <table class="brand">
           <thead><tr><th style="width:130px;">Tier</th><th style="width:360px;">Workstream</th><th>Outcome</th></tr></thead>
           <tbody>
-            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P1</span></span></td><td>Graph capture</td><td>record-once / replay-many implemented</td></tr>
+            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P1</span></span></td><td>Graph capture</td><td>record-once / replay-many (planned)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P1</span></span></td><td>Benchmarking</td><td>Google Benchmark + <span class="mono">make bench</span> + CI regression gate</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Peer access</td><td>simulator-only (physical multi-chip = human follow-up)</td></tr>
-            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Performance counters</td><td>additive counters surfaced via the API</td></tr>
+            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Performance counters</td><td>additive counters via the API (planned)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Coverage</td><td>80% line-coverage gate on <span class="mono">src/core/</span> + <span class="mono">src/api/</span></td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Tests</td><td>backfill + nine hardening categories under sanitizers</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P3</span></span></td><td>Docs &amp; examples</td><td><span class="mono">docs/</span> tree + runnable <span class="mono">examples/</span></td></tr>
@@ -427,7 +419,7 @@ graph LR
         <h2 class="slide-title">Record-once, replay-many — the highest priority</h2>
         <div class="stack">
           <div class="intro-row">
-            <p class="lead">Seven functions that previously returned <span class="muted">"not supported"</span> are now implemented as <strong>record-once / replay-many</strong> using an epoch-trace snapshot in a new internal graph module.</p>
+            <p class="lead">Seven functions that today return <span class="muted">"not supported"</span> are planned to become <strong>record-once / replay-many</strong> via an epoch-trace snapshot in a new internal graph module — tests for this contract are specified now; the runtime lands in a later PR.</p>
             <div class="side">
               <ul class="clean">
                 <li>Mirrors CUDA stream-capture / instantiate / launch.</li>
@@ -457,7 +449,7 @@ graph LR
         <h2 class="slide-title">Measurement and regression detection — not tuning</h2>
         <div class="split">
           <div>
-            <p class="lead">A <strong>Google Benchmark</strong> harness covers the FHE ops <strong>add, mul, NTT, automorph</strong> (SRP + MRP) plus the <strong>record → flush → replay</strong> path.</p>
+            <p class="lead">A <strong>Google Benchmark</strong> harness is planned to cover the FHE ops <strong>add, mul, NTT, automorph</strong> (SRP + MRP) plus the <strong>record → flush → replay</strong> path.</p>
             <div class="tile-grid cols-3" style="margin-top:22px;">
               <div class="metric"><span class="cap"><i data-lucide="terminal"></i></span><div class="num grad-text" style="font-size:36px; font-family: var(--font-mono);">make bench</div><div class="label">one-command run</div></div>
               <div class="metric"><span class="cap"><i data-lucide="git-pull-request"></i></span><div class="num grad-text" style="font-size:40px;">CI</div><div class="label">regression gate vs baseline</div></div>
@@ -495,10 +487,10 @@ graph LR
       <!-- Slide 8: P2a Peer access - simulator only -->
       <section>
         <p class="eyebrow"><span class="accent">Priority 2</span> · Peer access</p>
-        <h2 class="slide-title">Simulator-representable behavior today</h2>
+        <h2 class="slide-title">Simulator-representable behavior (planned scope)</h2>
         <div class="stack">
           <div class="intro-row">
-            <p class="lead">Peer-access entry points are implemented for the <strong>simulator's</strong> representable behavior — a peer-topology model plus peer copy.</p>
+            <p class="lead">Peer-access entry points are <strong>planned</strong> for the simulator's representable behavior — a peer-topology model plus peer copy. The build models a single device today; tests for the peer contract are specified now, and the runtime lands in a later PR.</p>
             <div class="side">
               <ul class="clean">
                 <li>Gated behind a dedicated hardware test tag, so the default suite stays green.</li>
@@ -508,8 +500,8 @@ graph LR
           </div>
           <div class="mermaid">
 graph LR
-  D0["Simulated Device 0"] <-->|"peer access (simulated)"| D1["Simulated Device 1"]
-  D1 -.->|"requires hardware"| H["Physical multi-chip&lt;br/&gt;human follow-up"]
+  D0["Simulated Device 0&lt;br/&gt;(single device today)"] -.->|"peer-access entry points (planned)"| P["Peer-topology model&lt;br/&gt;+ peer copy"]
+  P -.->|"requires hardware"| H["Physical multi-chip&lt;br/&gt;human follow-up"]
   classDef warn fill:#2A2413,stroke:#FBBF24,stroke-width:2px,color:#FBBF24;
   class H warn;
           </div>
@@ -521,8 +513,8 @@ graph LR
       <!-- Slide 9: P2b Performance counters -->
       <section>
         <p class="eyebrow"><span class="accent">Priority 2</span> · Performance counters</p>
-        <h2 class="slide-title">Real telemetry through a strictly additive struct</h2>
-        <p class="lead muted" style="margin-bottom:8px;">A new <span class="mono">hazePerformanceCounters</span> struct — populated by a metrics aggregator — lets <span class="mono">hazeGetPerformanceCounters</span> report real data. The public C ABI stays stable.</p>
+        <h2 class="slide-title">Telemetry through a strictly additive struct</h2>
+        <p class="lead muted" style="margin-bottom:8px;">A new <span class="mono">hazePerformanceCounters</span> struct — to be populated by a metrics aggregator — will let <span class="mono">hazeGetPerformanceCounters</span> report real data. Tests for this contract are specified now; the aggregator lands in a later PR. The public C ABI stays stable (the struct is strictly additive).</p>
         <div style="margin:14px 0 24px;"><span class="badge ok"><i data-lucide="shield-check"></i>ABI: additive only</span></div>
         <div class="tile-grid cols-3">
           <div class="metric"><span class="cap"><i data-lucide="list-checks"></i></span><div class="num grad-text">Op counts</div><div class="label">operations recorded per epoch</div></div>
@@ -541,7 +533,7 @@ graph LR
             <p class="lead">Clang source-based coverage (<span class="mono">llvm-profdata</span> + <span class="mono">llvm-cov</span>) — already in the toolchain, <strong>no new runtime dependency</strong>.</p>
             <ul class="clean">
               <li>Scoped to <span class="mono">src/core/</span> + <span class="mono">src/api/</span>.</li>
-              <li>A CI gate enforces <strong>80% line coverage</strong>.</li>
+              <li>A CI gate will enforce <strong>80% line coverage</strong> (planned).</li>
               <li>Switched on <strong>after</strong> backfill and hardening raise coverage — so it never gates the branch red before coverage exists.</li>
             </ul>
           </div>
@@ -574,7 +566,7 @@ graph LR
       <section>
         <p class="eyebrow"><span class="accent">Priority 2</span> · Tests</p>
         <h2 class="slide-title">Backfill to full coverage, then harden</h2>
-        <p class="lead muted" style="margin-bottom:12px;">Backfill the remaining public functions (~54 of 77 exercised → target all 77) and add nine categories of negative / boundary hardening tests under ASan / UBSan / TSan.</p>
+        <p class="lead muted" style="margin-bottom:12px;">Backfill the remaining public functions (~54 of 77 exercised today &#8594; target all 77) and add nine categories of negative / boundary hardening tests under ASan / UBSan / TSan. Eight categories are specified this checkpoint; allocator-limits is deferred to a later PR.</p>
         <div class="chart-wrap" style="margin-bottom:22px;">
           <div class="prog-row">
             <span class="prog-l">public API coverage</span>
@@ -596,7 +588,7 @@ graph LR
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="alarm-clock"></i></span><h3 style="font-size:23px;">Unflushed reads</h3></div>
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="git-compare"></i></span><h3 style="font-size:23px;">Device vs shadow pointer</h3></div>
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="settings"></i></span><h3 style="font-size:23px;">Configuration errors</h3></div>
-          <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="database"></i></span><h3 style="font-size:23px;">Allocator limits</h3></div>
+          <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="database"></i></span><h3 style="font-size:23px;">Allocator limits <span class="muted" style="font-size:16px;">(deferred)</span></h3></div>
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="triangle-alert"></i></span><h3 style="font-size:23px;">Error-state semantics</h3></div>
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="shield"></i></span><h3 style="font-size:23px;">ABI exception safety</h3></div>
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="lock"></i></span><h3 style="font-size:23px;">Lock ordering / concurrency</h3></div>
@@ -681,7 +673,7 @@ graph LR
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-branch"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Record-and-replay intact</h3><p><span class="mono">hazeFlush</span> remains the sole materialization trigger.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="circle-check"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Three no-ops unchanged</h3><p>Smoke-tested, not reimplemented.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="box"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>OpenFHE confined</h3><p>Stays within the replay bridge boundary.</p></div>
-          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-merge"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>CI stays green</h3><p>Seven existing workflows untouched; three new jobs added alongside.</p></div>
+          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-merge"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>CI stays green</h3><p>Seven existing workflows untouched; three new jobs planned alongside them.</p></div>
         </div>
         <div class="footer"><span>Haze · libhaze</span><span class="fbrand wordmark">Blitzy</span></div>
       </section>
@@ -713,15 +705,15 @@ graph LR
         <div class="brand-wrap">
           <div class="hero-band">
             <div class="lockup"><span class="icon-chip lg"><i data-lucide="zap"></i></span></div>
-            <h2 style="font-size:48px;margin:20px 0 12px;max-width:1300px;">A CUDA-shaped FHE runtime — now benchmarked, coverage-gated, and documented, with its public ABI intact.</h2>
+            <h2 style="font-size:48px;margin:20px 0 12px;max-width:1300px;">A CUDA-shaped FHE runtime — on track to be benchmarked, coverage-gated, and documented, with its public ABI intact.</h2>
             <div class="hero-rule"></div>
-            <p class="lead muted" style="margin-top:20px;">Three user rules satisfied: decision log (Explainability), observability instrumentation (Observability), and this deck (Executive Presentation).</p>
+            <p class="lead muted" style="margin-top:20px;">Three user-rule deliverables in place: the decision log (Explainability), observability design with structured logging (Observability), and this deck (Executive Presentation).</p>
           </div>
           <div class="tile-grid cols-4" style="width:100%;">
             <div class="metric" style="align-items:center;text-align:center;"><span class="cap"><i data-lucide="code"></i></span><div class="num grad-text">77</div><div class="label">public functions</div></div>
             <div class="metric" style="align-items:center;text-align:center;"><span class="cap"><i data-lucide="shield-check"></i></span><div class="num grad-text">80%</div><div class="label">coverage target</div></div>
             <div class="metric" style="align-items:center;text-align:center;"><span class="cap"><i data-lucide="git-merge"></i></span><div class="num grad-text">0</div><div class="label">ABI breaks</div></div>
-            <div class="metric" style="align-items:center;text-align:center;"><span class="cap"><i data-lucide="list-checks"></i></span><div class="num grad-text">3</div><div class="label">rules satisfied</div></div>
+            <div class="metric" style="align-items:center;text-align:center;"><span class="cap"><i data-lucide="list-checks"></i></span><div class="num grad-text">3</div><div class="label">rule deliverables</div></div>
           </div>
           <p class="muted" style="font-size:22px;">Delivered by <span class="wordmark">Blitzy</span></p>
         </div>
@@ -734,16 +726,13 @@ graph LR
   <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
   <!-- Lucide UMD (classic script -> sets window.lucide) -->
   <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
-  <!-- Deck bootstrap: reveal.js and Lucide come up first and independently of Mermaid, which is
-       then loaded via a dynamic import() so a diagram-CDN outage degrades to captioned fallbacks
-       instead of blanking the deck (see decision log D-13). -->
+  <!-- Deck bootstrap: reveal.js and Lucide initialize first, then Mermaid via dynamic import(). Rationale: decision log D-13. -->
   <script type="module">
     // Resolve Lucide icon placeholders up front (safe no-op if the UMD bundle did not load).
     if (window.lucide) window.lucide.createIcons();
 
-    // Bring reveal.js up FIRST, guarded on window.Reveal, so the deck is styled and navigable
-    // regardless of whether Mermaid later loads. A static top-level `import` of Mermaid would abort
-    // this whole module on a CDN miss; that failure mode is what decision log D-13 removes.
+    // Initialize reveal.js first, guarded on window.Reveal, before the Mermaid dynamic import.
+    // Rationale: decision log D-13.
     if (window.Reveal) {
       await Reveal.initialize({
         hash: true,
@@ -762,8 +751,8 @@ graph LR
       Reveal.on('slidechanged', () => { if (window.lucide) window.lucide.createIcons(); });
     }
 
-    // Mermaid (ESM-only in v11) is a best-effort enhancement loaded AFTER reveal init. The dynamic
-    // import() confines any network failure to the try/catch below so the deck stays intact.
+    // Load Mermaid (ESM-only in v11) via dynamic import() after reveal init, inside try/catch.
+    // Rationale: decision log D-13.
     const nodes = [...document.querySelectorAll('.mermaid')];
     try {
       const { default: mermaid } = await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.0/dist/mermaid.esm.min.mjs');
@@ -791,8 +780,7 @@ graph LR
         flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true }
       });
 
-      // Render every diagram to a full-size SVG string, then inject. A single diagram failure
-      // falls back to a caption without affecting the others.
+      // Render each diagram to an SVG string and inject it; on a per-diagram failure inject a caption.
       for (let i = 0; i < nodes.length; i++) {
         const def = nodes[i].textContent.trim();
         try {
@@ -806,8 +794,7 @@ graph LR
         }
       }
     } catch (e) {
-      // The Mermaid module itself could not load (offline / CDN blocked). Replace each diagram
-      // source with a styled caption so no raw source shows and no slide is blank.
+      // Mermaid module failed to load; replace each diagram with a fallback caption.
       console.error('Mermaid module load failed; using diagram fallbacks', e);
       for (const node of nodes) {
         node.innerHTML = '<div class="mermaid-fallback">Diagram unavailable offline</div>';
