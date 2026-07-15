@@ -1,0 +1,122 @@
+name: benchmark
+
+# P1b microbenchmark regression gate. Builds the Google Benchmark harness
+# (HAZE_BUILD_BENCHMARKS=ON, a separate executable linking the shipped
+# libhaze.so — the library and its ABI are unaffected), runs the full suite via
+# `make bench`, and compares the measured JSON against the checked-in baseline
+# (benchmark/baseline.json) with scripts/bench_compare.py. The gate FAILS on any
+# missing benchmark name, any errored/skipped benchmark, or any regression
+# beyond the tolerance threshold. Kept as a SEPARATE workflow so the existing
+# merge-gate workflows are untouched.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Build + run benchmarks, gate against baseline (nix devshell)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Free disk space
+        # Nix store + OpenFHE + haze build pushes ubuntu-latest's
+        # ~14 GB of free space. Reclaim ~25 GB up front.
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h
+
+      - name: Verify nested submodules cloned
+        run: |
+          test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
+          test -d vendor/niobium-fhetch/vendor/json
+
+      - name: Capture OpenFHE submodule commits
+        # Cache key tracks both OpenFHE submodule revs (instrumented fork inside
+        # niobium-fhetch, and the stock vendor/openfhe). Any bump invalidates.
+        id: openfhe_rev
+        run: |
+          rev=$(git -C vendor/niobium-fhetch/vendor/openfhe rev-parse HEAD)
+          stock_rev=$(git -C vendor/openfhe rev-parse HEAD)
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "stock_rev=$stock_rev" >> "$GITHUB_OUTPUT"
+
+      - name: Cache OpenFHE install dirs
+        # Same cache layout as build-test.yml: the instrumented OpenFHE install +
+        # build tree and the stock OpenFHE install + build tree. Keyed on
+        # flake.lock (nix toolchain moves) plus both submodule revs.
+        uses: actions/cache@v5
+        with:
+          path: |
+            vendor/niobium-fhetch/vendor/lib/openfhe
+            vendor/niobium-fhetch/vendor/openfhe/build
+            vendor/lib/openfhe-stock
+            vendor/openfhe/build
+          key: ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-${{ steps.openfhe_rev.outputs.rev }}-${{ steps.openfhe_rev.outputs.stock_rev }}
+          restore-keys: |
+            ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+
+      - name: Verify devshell evaluates (incl. Google Benchmark)
+        run: nix develop --command bash -c 'clang --version && cmake --version'
+
+      - name: Build + run benchmarks (release)
+        # `make bench` configures with HAZE_BUILD_BENCHMARKS=ON, builds
+        # haze_benchmarks, runs the full suite, and writes
+        # build/benchmark_results.json.
+        run: nix develop --command make bench MODE=release
+
+      - name: Gate against the checked-in baseline
+        # bench_compare.py is stdlib-only; run it with the runner's system
+        # python3 (outside the devshell). Fails on missing names, errored/
+        # skipped benchmarks, or regressions beyond the threshold.
+        run: |
+          python3 scripts/bench_compare.py \
+            benchmark/baseline.json \
+            build/benchmark_results.json \
+            --threshold 0.50 --metric cpu_time
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-results-${{ github.run_attempt }}
+          path: build/benchmark_results.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-build-logs-${{ github.run_attempt }}
+          path: |
+            build/CMakeFiles/CMakeOutput.log
+            build/CMakeFiles/CMakeError.log
+            build/runs/
+          if-no-files-found: ignore
+          retention-days: 7

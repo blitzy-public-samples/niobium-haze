@@ -165,7 +165,8 @@ extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, s
     if (kind == HAZE_MEMCPY_DEVICE_TO_HOST)
         return set_internal_result(haze::copy_to_host_mrp(dst, src, count, base_len));
     if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE)
-        return set_internal_result(haze::copy_device_to_device_mrp(dst, src, base, base_len));
+        return set_internal_result(
+            haze::copy_device_to_device_mrp(dst, src, count, base, base_len));
 
     return set_error(HAZE_ERROR_INVALID_VALUE);
 }
@@ -195,6 +196,18 @@ extern "C" hazeError_t hazeMemcpyPeerAsync(void *dst, int dst_device, const void
     const int devices = haze::device_count();
     if (dst_device < 0 || dst_device >= devices || src_device < 0 || src_device >= devices)
         return set_error(HAZE_ERROR_INVALID_VALUE);
+    // Enforce peer authorization before recording (P1): a same-device copy is
+    // always permitted, but a copy between distinct devices requires peer
+    // access to have been enabled. This connects the peer capability/enable
+    // state to the copy path instead of bypassing it. The device lock is taken
+    // and released entirely inside this call, before copy_device_to_device
+    // acquires the epoch lock, so the device mutex never nests with the epoch
+    // or allocator mutex.
+    if (auto authorized = haze::device_peer_copy_authorized(dst_device, src_device); !authorized)
+        return set_internal_result(authorized);
+    // copy_device_to_device validates destination liveness and the exact
+    // polynomial byte count, and meters the transfer only after it succeeds
+    // (P3), so no invalid or unsupported peer copy is ever counted as moved.
     return set_internal_result(
         haze::copy_device_to_device(haze::to_dev_addr(dst), haze::to_dev_addr(src), count));
 }

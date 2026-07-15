@@ -12,11 +12,26 @@
 // from the Product.
 #include "core/metrics.hpp"
 
-#include <atomic>
+#include "common/thread_safety.hpp"
+
 #include <cstdint>
 #include <haze/haze_types.h>
+#include <limits>
 
 namespace haze {
+
+namespace {
+// Add `n` to `counter` in place, clamping at UINT64_MAX instead of wrapping.
+// Called only with mutex_ held (all callers below take the lock first).
+void add_saturating(uint64_t &counter, uint64_t n) noexcept {
+    constexpr uint64_t kMax = std::numeric_limits<uint64_t>::max();
+    if (counter > kMax - n) {
+        counter = kMax;
+    } else {
+        counter += n;
+    }
+}
+} // namespace
 
 Metrics &Metrics::instance() noexcept {
     static Metrics inst;
@@ -24,47 +39,60 @@ Metrics &Metrics::instance() noexcept {
 }
 
 void Metrics::add_op(uint64_t n) noexcept {
-    op_count_.fetch_add(n, std::memory_order_relaxed);
+    HazeLockGuard lock(mutex_);
+    add_saturating(op_count_, n);
 }
 
 void Metrics::add_bytes_h2d(uint64_t n) noexcept {
-    bytes_h2d_.fetch_add(n, std::memory_order_relaxed);
+    HazeLockGuard lock(mutex_);
+    add_saturating(bytes_h2d_, n);
 }
 
 void Metrics::add_bytes_d2h(uint64_t n) noexcept {
-    bytes_d2h_.fetch_add(n, std::memory_order_relaxed);
+    HazeLockGuard lock(mutex_);
+    add_saturating(bytes_d2h_, n);
 }
 
 void Metrics::add_bytes_d2d(uint64_t n) noexcept {
-    bytes_d2d_.fetch_add(n, std::memory_order_relaxed);
+    HazeLockGuard lock(mutex_);
+    add_saturating(bytes_d2d_, n);
 }
 
 void Metrics::record_flush(uint64_t ns) noexcept {
-    flush_count_.fetch_add(1, std::memory_order_relaxed);
-    flush_time_ns_total_.fetch_add(ns, std::memory_order_relaxed);
-    flush_time_ns_last_.store(ns, std::memory_order_relaxed);
+    HazeLockGuard lock(mutex_);
+    add_saturating(flush_count_, 1);
+    add_saturating(flush_time_ns_total_, ns);
+    // Most-recent flush wall time: last-writer-wins. A single store under the
+    // lock, so it is never torn; concurrent flushes leave one of their times.
+    flush_time_ns_last_ = ns;
 }
 
 hazePerformanceCounters Metrics::snapshot() const noexcept {
+    // One lock acquisition copies all seven counters, so the returned struct is
+    // internally consistent (every field is from the same instant).
+    HazeLockGuard lock(mutex_);
     hazePerformanceCounters c;
-    c.op_count = op_count_.load(std::memory_order_relaxed);
-    c.bytes_h2d = bytes_h2d_.load(std::memory_order_relaxed);
-    c.bytes_d2h = bytes_d2h_.load(std::memory_order_relaxed);
-    c.bytes_d2d = bytes_d2d_.load(std::memory_order_relaxed);
-    c.flush_count = flush_count_.load(std::memory_order_relaxed);
-    c.flush_time_ns_total = flush_time_ns_total_.load(std::memory_order_relaxed);
-    c.flush_time_ns_last = flush_time_ns_last_.load(std::memory_order_relaxed);
+    c.op_count = op_count_;
+    c.bytes_h2d = bytes_h2d_;
+    c.bytes_d2h = bytes_d2h_;
+    c.bytes_d2d = bytes_d2d_;
+    c.flush_count = flush_count_;
+    c.flush_time_ns_total = flush_time_ns_total_;
+    c.flush_time_ns_last = flush_time_ns_last_;
     return c;
 }
 
 void Metrics::reset() noexcept {
-    op_count_.store(0, std::memory_order_relaxed);
-    bytes_h2d_.store(0, std::memory_order_relaxed);
-    bytes_d2h_.store(0, std::memory_order_relaxed);
-    bytes_d2d_.store(0, std::memory_order_relaxed);
-    flush_count_.store(0, std::memory_order_relaxed);
-    flush_time_ns_total_.store(0, std::memory_order_relaxed);
-    flush_time_ns_last_.store(0, std::memory_order_relaxed);
+    // Zero all seven under one lock: a concurrent snapshot sees either the full
+    // pre-reset or full post-reset state, never a partial reset.
+    HazeLockGuard lock(mutex_);
+    op_count_ = 0;
+    bytes_h2d_ = 0;
+    bytes_d2h_ = 0;
+    bytes_d2d_ = 0;
+    flush_count_ = 0;
+    flush_time_ns_total_ = 0;
+    flush_time_ns_last_ = 0;
 }
 
 } // namespace haze

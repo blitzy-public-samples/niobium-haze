@@ -99,6 +99,10 @@ void BM_HazeAdd(benchmark::State &state) {
         hazeError_t rc = hazeAdd(d, a, b, kModIdx, nullptr);
         benchmark::DoNotOptimize(rc);
         benchmark::DoNotOptimize(d);
+        if (rc != HAZE_SUCCESS) {
+            state.SkipWithError("hazeAdd returned a non-success status");
+            break;
+        }
         benchmark::ClobberMemory();
     }
     require_ok(hazeFree(a));
@@ -123,6 +127,10 @@ void BM_HazeMul(benchmark::State &state) {
         hazeError_t rc = hazeMul(d, a, b, kModIdx, nullptr);
         benchmark::DoNotOptimize(rc);
         benchmark::DoNotOptimize(d);
+        if (rc != HAZE_SUCCESS) {
+            state.SkipWithError("hazeMul returned a non-success status");
+            break;
+        }
         benchmark::ClobberMemory();
     }
     require_ok(hazeFree(a));
@@ -144,6 +152,10 @@ void BM_HazeNTT(benchmark::State &state) {
         hazeError_t rc = hazeNTT(d, a, kModIdx, nullptr);
         benchmark::DoNotOptimize(rc);
         benchmark::DoNotOptimize(d);
+        if (rc != HAZE_SUCCESS) {
+            state.SkipWithError("hazeNTT returned a non-success status");
+            break;
+        }
         benchmark::ClobberMemory();
     }
     require_ok(hazeFree(a));
@@ -164,6 +176,10 @@ void BM_HazeAutomorph(benchmark::State &state) {
         hazeError_t rc = hazeAutomorph(d, a, kAutomorphIndex, nullptr);
         benchmark::DoNotOptimize(rc);
         benchmark::DoNotOptimize(d);
+        if (rc != HAZE_SUCCESS) {
+            state.SkipWithError("hazeAutomorph returned a non-success status");
+            break;
+        }
         benchmark::ClobberMemory();
     }
     require_ok(hazeFree(a));
@@ -196,6 +212,10 @@ void BM_HazeAddMrp(benchmark::State &state) {
         hazeError_t rc = hazeAddMrp(d, a, b, base, 3, nullptr);
         benchmark::DoNotOptimize(rc);
         benchmark::DoNotOptimize(d[0]);
+        if (rc != HAZE_SUCCESS) {
+            state.SkipWithError("hazeAddMrp returned a non-success status");
+            break;
+        }
         benchmark::ClobberMemory();
     }
     require_ok(hazeFreeMrp(a_dev, 3));
@@ -224,6 +244,10 @@ void BM_HazeMulMrp(benchmark::State &state) {
         hazeError_t rc = hazeMulMrp(d, a, b, base, 3, nullptr);
         benchmark::DoNotOptimize(rc);
         benchmark::DoNotOptimize(d[0]);
+        if (rc != HAZE_SUCCESS) {
+            state.SkipWithError("hazeMulMrp returned a non-success status");
+            break;
+        }
         benchmark::ClobberMemory();
     }
     require_ok(hazeFreeMrp(a_dev, 3));
@@ -248,6 +272,10 @@ void BM_HazeNTTMrp(benchmark::State &state) {
         hazeError_t rc = hazeNTTMrp(d, a, base, 3, nullptr);
         benchmark::DoNotOptimize(rc);
         benchmark::DoNotOptimize(d[0]);
+        if (rc != HAZE_SUCCESS) {
+            state.SkipWithError("hazeNTTMrp returned a non-success status");
+            break;
+        }
         benchmark::ClobberMemory();
     }
     require_ok(hazeFreeMrp(a_dev, 3));
@@ -271,6 +299,10 @@ void BM_HazeAutomorphMrp(benchmark::State &state) {
         hazeError_t rc = hazeAutomorphMrp(d, a, kAutomorphIndex, base, 3, nullptr);
         benchmark::DoNotOptimize(rc);
         benchmark::DoNotOptimize(d[0]);
+        if (rc != HAZE_SUCCESS) {
+            state.SkipWithError("hazeAutomorphMrp returned a non-success status");
+            break;
+        }
         benchmark::ClobberMemory();
     }
     require_ok(hazeFreeMrp(a_dev, 3));

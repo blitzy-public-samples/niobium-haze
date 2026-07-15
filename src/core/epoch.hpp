@@ -40,13 +40,28 @@ inline constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
 // cryptocontext) plus the output binding table used to repopulate shadow
 // buffers on each replay. Produced by EpochState::end_capture_snapshot_locked;
 // consumed by EpochState::replay_snapshot_locked.
+//
+// Capture-only contract: end_capture_snapshot_locked writes and copies the
+// project but does NOT execute it. Each replay_snapshot_locked re-dispatches
+// the persisted project from disk, so the snapshot carries no pre-computed
+// output values — the values are produced fresh on every launch. This keeps
+// hazeFlush / hazeGraphLaunch the sole materialization triggers.
 struct EpochTraceSnapshot {
     std::filesystem::path project_dir;                    // graph-owned copy
     std::vector<std::pair<DevAddr, std::string>> outputs; // addr -> probe name
     std::string target;                                   // replay target
-    // Per-output computed values captured at snapshot time, index-parallel to
-    // `outputs`; re-applied to each output address's shadow on every replay.
-    std::vector<std::vector<uint64_t>> output_values;
+    // Canonical topology signature: the recorded trace instruction-file bytes.
+    // Two captures share topology iff their op sequences (opcodes, operands,
+    // output tags) are byte-identical, so hazeGraphExecUpdate can accept a
+    // same-topology refresh and reject a different operation that happens to
+    // write the same output address (e.g. a multiply refreshing an add exec).
+    std::string topology;
+    // Allocator generation of each output address at capture time,
+    // index-parallel to `outputs`. Each launch verifies the address still
+    // holds that generation before repopulating its shadow, so a freed +
+    // recycled DevAddr (the allocator reuses freed addresses via its pool)
+    // cannot be silently clobbered by a stale graph's replay.
+    std::vector<uint64_t> output_generations;
 };
 
 // Singleton tracking the polymap, pending outputs, and recording flag for
@@ -83,6 +98,12 @@ class EpochState {
     std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
     void reset() noexcept HAZE_EXCLUDES(mutex_);
+
+    // True iff an epoch is currently recording. Read-only lifecycle-state
+    // introspection backing the observability readiness surface
+    // (haze::runtime_readiness()); takes and releases mutex_ on its own. Not
+    // const because it acquires the (non-mutable) epoch mutex.
+    bool is_recording() noexcept HAZE_EXCLUDES(mutex_);
 
     // ---- Locked methods (caller holds mutex_) ----
 
@@ -314,5 +335,18 @@ std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAdd
 // H2D-time eager-tag: register the H2D'd buffer at `addr` as a fhetch input
 // (EpochState::tag_h2d_input_locked).
 std::expected<void, HazeInternalError> tag_h2d_input(DevAddr addr) noexcept;
+
+// Securely clone an on-disk project directory into a fresh, exclusively-created
+// owner-only (0700) directory under the system temp path, returning the new
+// path. The destination is created atomically with a randomized name (no
+// predictable-name pre-creation race and no overwrite of an existing tree), and
+// every copied entry is re-permissioned to owner-only so captured FHE material
+// is never world-readable. On any failure the partial destination is removed
+// before returning the error. Non-throwing: all filesystem work uses the
+// std::error_code overloads or is guarded, so it is safe to call from the
+// noexcept graph shims. Shared by end_capture_snapshot_locked (program dir ->
+// graph-owned copy) and the graph module (graph copy -> exec-owned copy).
+std::expected<std::filesystem::path, HazeInternalError>
+secure_clone_project_dir(const std::filesystem::path &src) noexcept;
 
 } // namespace haze

@@ -51,4 +51,54 @@ class CorrelationScope {
     std::uint64_t previous_;
 };
 
+// Returns a fresh, process-unique correlation id (monotonic, never 0). The
+// runtime calls this once per record->flush->replay cycle (flush and graph
+// launch) and installs it via CorrelationScope, so every diagnostic emitted
+// during that cycle -- including those from the replay_bridge on the same
+// thread -- shares one id and can be correlated after the fact.
+std::uint64_t next_correlation_id() noexcept;
+
+// True when span tracing is enabled via the HAZE_TRACE environment variable
+// (any non-empty value other than "0"), re-read on each call so tracing can be
+// toggled at runtime (and exercised by tests). When false, TraceSpan begin/end
+// records are suppressed; error diagnostics still flow through log_error
+// unconditionally.
+bool trace_enabled() noexcept;
+
+// RAII span bracketing one traced runtime operation. When trace_enabled(), the
+// constructor emits a "trace: begin <name> ..." record and the destructor emits
+// a matching "trace: end <name> status=ok|error" record, both stamped with the
+// current correlation id, so a span's begin/end pair frames all diagnostics
+// emitted between them. When tracing is disabled the span is inert. `name` must
+// outlive the span (callers pass string literals); the type is move/copy-free.
+class TraceSpan {
+  public:
+    explicit TraceSpan(std::string_view name) noexcept;
+    ~TraceSpan();
+    // Flip the span's terminal status to "error" (reported by the destructor).
+    void mark_error() noexcept;
+    TraceSpan(const TraceSpan &) = delete;
+    TraceSpan &operator=(const TraceSpan &) = delete;
+
+  private:
+    std::string_view name_;
+    bool ok_ = true;
+};
+
+// Readiness snapshot: the library-context reinterpretation of a service health
+// probe (see docs/observability/README.md). Each field answers one lifecycle /
+// configuration-state question a linked application can poll before driving the
+// runtime. Definition lives in the core runtime (epoch.cpp) so this common-layer
+// header stays free of core dependencies.
+struct RuntimeReadiness {
+    bool configured;          // a crypto context / ring dimension is configured
+    bool backend_initialized; // the compiler backend has initialized successfully
+    bool epoch_active;        // an epoch is currently recording
+};
+
+// Returns the current readiness snapshot. Each field is read under its own
+// subsystem lock, acquired and released independently (no lock is held while
+// another is taken), so this adds no new lock-ordering edge.
+RuntimeReadiness runtime_readiness() noexcept;
+
 } // namespace haze

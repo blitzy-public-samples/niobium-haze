@@ -706,3 +706,304 @@ TEST_CASE("graph capture: exec and graph entries validate each argument independ
     REQUIRE(hazeGraphDestroy(graph) == HAZE_SUCCESS);
     gg.release();
 }
+
+// ---------------------------------------------------------------------------
+// [integration] T1 discriminators. The cases above establish the happy path but
+// still pass against two historical defects: caching output VALUES at capture
+// and re-injecting them on launch (instead of really replaying), and comparing
+// only output ADDRESSES in exec-update (instead of the recorded topology). The
+// four cases below fail against those defects specifically.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("graph capture: replay uses the inputs frozen at capture, not later device writes",
+          "[integration]") {
+    // Record-and-replay contract (the CUDA-graph "same arguments" analogue):
+    // EndCapture snapshots the recorded project — including the operand residues
+    // serialized at capture — and every launch re-dispatches THAT frozen project.
+    // Overwriting the operand device memory at the same DevAddr after capture must
+    // therefore NOT change a later replay. (A build that cached the first output
+    // would also look "stable" here; the free/recycle case below is what a genuine
+    // re-dispatch must pass and a cache cannot.)
+    const uint64_t modulus = haze::test::setup_integration_compute_config(kRingDim, kQ0, 0);
+
+    void *a = nullptr;
+    void *b = nullptr;
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    DeviceGuard ga(a);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gb(b);
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gdst(dst);
+
+    const std::vector<uint64_t> avec = haze::test::make_residue(modulus, 0x1111ULL, kRingDim);
+    const std::vector<uint64_t> bvec = haze::test::make_residue(modulus, 0x2222ULL, kRingDim);
+    REQUIRE(hazeMemcpy(a, avec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, bvec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    hazeGraph_t graph = nullptr;
+    {
+        CaptureGuard capture_drain;
+        REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAdd(dst, a, b, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+        REQUIRE(hazeStreamEndCapture(nullptr, &graph) == HAZE_SUCCESS);
+    }
+    REQUIRE(graph != nullptr);
+    GraphGuard gg(graph);
+
+    hazeGraphExec_t exec = nullptr;
+    REQUIRE(hazeGraphInstantiate(&exec, graph) == HAZE_SUCCESS);
+    REQUIRE(exec != nullptr);
+    ExecGuard ge(exec);
+
+    REQUIRE(hazeGraphLaunch(exec, nullptr) == HAZE_SUCCESS);
+    std::vector<uint64_t> out1(kRingDim, 0xDEADBEEFULL);
+    REQUIRE(hazeMemcpy(out1.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+
+    // Overwrite operand a at the SAME DevAddr with a different residue.
+    const std::vector<uint64_t> avec2 = haze::test::make_residue(modulus, 0x7777ULL, kRingDim);
+    REQUIRE(avec2 != avec);
+    REQUIRE(hazeMemcpy(a, avec2.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    // The replay is unchanged: it reflects the residues captured at EndCapture,
+    // not the later device write.
+    REQUIRE(hazeGraphLaunch(exec, nullptr) == HAZE_SUCCESS);
+    std::vector<uint64_t> out2(kRingDim, 0xDEADBEEFULL);
+    REQUIRE(hazeMemcpy(out2.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(out2 == out1);
+
+    std::vector<uint64_t> expected(kRingDim);
+    for (std::size_t k = 0; k < kRingDim; ++k)
+        expected[k] = haze::test::add_mod(avec[k], bvec[k], modulus);
+    REQUIRE(out1 == expected);
+
+    REQUIRE(hazeGraphExecDestroy(exec) == HAZE_SUCCESS);
+    ge.release();
+    REQUIRE(hazeGraphDestroy(graph) == HAZE_SUCCESS);
+    gg.release();
+}
+
+TEST_CASE("graph capture: launch after the output is freed and its address recycled is rejected",
+          "[integration]") {
+    // G6 ABA defense proves the launch really re-dispatches (a cache would blindly
+    // re-inject): the snapshot recorded the output DevAddr's allocation generation
+    // at capture, so once that buffer is freed and its address recycled into a new
+    // allocation the generation no longer matches and the launch is rejected with
+    // SOURCE_UNAVAILABLE instead of clobbering the unrelated new buffer.
+    const uint64_t modulus = haze::test::setup_integration_compute_config(kRingDim, kQ0, 0);
+
+    void *a = nullptr;
+    void *b = nullptr;
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    DeviceGuard ga(a);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gb(b);
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+
+    const std::vector<uint64_t> avec = haze::test::make_residue(modulus, 0x1111ULL, kRingDim);
+    const std::vector<uint64_t> bvec = haze::test::make_residue(modulus, 0x2222ULL, kRingDim);
+    REQUIRE(hazeMemcpy(a, avec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, bvec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    hazeGraph_t graph = nullptr;
+    {
+        CaptureGuard capture_drain;
+        REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAdd(dst, a, b, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+        REQUIRE(hazeStreamEndCapture(nullptr, &graph) == HAZE_SUCCESS);
+    }
+    REQUIRE(graph != nullptr);
+    GraphGuard gg(graph);
+
+    hazeGraphExec_t exec = nullptr;
+    REQUIRE(hazeGraphInstantiate(&exec, graph) == HAZE_SUCCESS);
+    REQUIRE(exec != nullptr);
+    ExecGuard ge(exec);
+
+    // Free the tagged output and reacquire a buffer. The allocator's LIFO free
+    // list typically hands back the same DevAddr — the dangerous ABA case — but
+    // the generation was bumped, so the recorded generation is now stale.
+    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    void *recycled = nullptr;
+    REQUIRE(hazeMalloc(&recycled, kBytes) == HAZE_SUCCESS);
+    DeviceGuard grecycled(recycled);
+
+    REQUIRE(hazeGraphLaunch(exec, nullptr) == HAZE_ERROR_SOURCE_UNAVAILABLE);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_SOURCE_UNAVAILABLE);
+    REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
+
+    // The rejected launch did not write into the recycled buffer: it was never
+    // tagged/flushed, so a device->host read still reports it as not flushed.
+    std::vector<uint64_t> probe(kRingDim, 0xDEADBEEFULL);
+    REQUIRE(hazeMemcpy(probe.data(), recycled, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_ERROR_NOT_FLUSHED);
+    hazeGetLastError();
+
+    REQUIRE(hazeGraphExecDestroy(exec) == HAZE_SUCCESS);
+    ge.release();
+    REQUIRE(hazeGraphDestroy(graph) == HAZE_SUCCESS);
+    gg.release();
+}
+
+TEST_CASE("graph capture: device reset invalidates captured graphs and execs", "[integration]") {
+    // hazeDeviceReset tears down the runtime, which must also drop every captured
+    // graph and instantiated exec (graph_reset). The monotonic handle-id counter
+    // is deliberately NOT reset, so a stale token can never alias a post-reset one
+    // and is rejected everywhere, and a fresh capture cycle still works.
+    const uint64_t modulus = haze::test::setup_integration_compute_config(kRingDim, kQ0, 0);
+
+    void *a = nullptr;
+    void *b = nullptr;
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+
+    const std::vector<uint64_t> avec = haze::test::make_residue(modulus, 0x1111ULL, kRingDim);
+    const std::vector<uint64_t> bvec = haze::test::make_residue(modulus, 0x2222ULL, kRingDim);
+    REQUIRE(hazeMemcpy(a, avec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, bvec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    hazeGraph_t graph = nullptr;
+    {
+        CaptureGuard capture_drain;
+        REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAdd(dst, a, b, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+        REQUIRE(hazeStreamEndCapture(nullptr, &graph) == HAZE_SUCCESS);
+    }
+    REQUIRE(graph != nullptr);
+
+    hazeGraphExec_t exec = nullptr;
+    REQUIRE(hazeGraphInstantiate(&exec, graph) == HAZE_SUCCESS);
+    REQUIRE(exec != nullptr);
+
+    // Reset drops the device allocations AND the graph/exec registries.
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+
+    // Every stale handle is rejected; none is silently reused.
+    REQUIRE(hazeGraphLaunch(exec, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeGraphExecUpdate(exec, graph) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeGraphExecDestroy(exec) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeGraphDestroy(graph) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+
+    // The runtime still works after the reset: a fresh capture/instantiate/launch
+    // cycle succeeds with freshly minted (non-aliasing) handles.
+    const uint64_t modulus2 = haze::test::setup_integration_compute_config(kRingDim, kQ0, 0);
+    REQUIRE(modulus2 == modulus);
+    void *a2 = nullptr;
+    void *b2 = nullptr;
+    void *dst2 = nullptr;
+    REQUIRE(hazeMalloc(&a2, kBytes) == HAZE_SUCCESS);
+    DeviceGuard ga2(a2);
+    REQUIRE(hazeMalloc(&b2, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gb2(b2);
+    REQUIRE(hazeMalloc(&dst2, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gdst2(dst2);
+    REQUIRE(hazeMemcpy(a2, avec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b2, bvec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    hazeGraph_t graph2 = nullptr;
+    {
+        CaptureGuard capture_drain;
+        REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAdd(dst2, a2, b2, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst2) == HAZE_SUCCESS);
+        REQUIRE(hazeStreamEndCapture(nullptr, &graph2) == HAZE_SUCCESS);
+    }
+    REQUIRE(graph2 != nullptr);
+    GraphGuard gg2(graph2);
+    REQUIRE(graph2 != graph); // fresh token, does not alias the pre-reset graph
+
+    hazeGraphExec_t exec2 = nullptr;
+    REQUIRE(hazeGraphInstantiate(&exec2, graph2) == HAZE_SUCCESS);
+    REQUIRE(exec2 != nullptr);
+    ExecGuard ge2(exec2);
+    REQUIRE(exec2 != exec); // fresh token, does not alias the pre-reset exec
+    REQUIRE(hazeGraphLaunch(exec2, nullptr) == HAZE_SUCCESS);
+
+    REQUIRE(hazeGraphExecDestroy(exec2) == HAZE_SUCCESS);
+    ge2.release();
+    REQUIRE(hazeGraphDestroy(graph2) == HAZE_SUCCESS);
+    gg2.release();
+}
+
+TEST_CASE("graph capture: exec update rejects a different op even at the same output address",
+          "[integration]") {
+    // Isolates topology from output-address identity: g_add and g_mul write to the
+    // SAME dst DevAddr and tag the SAME output, so the ONLY difference is the
+    // opcode. An update that compared output addresses would wrongly accept it; the
+    // topology fingerprint makes add-vs-mul a genuine mismatch and rejects it.
+    const uint64_t modulus = haze::test::setup_integration_compute_config(kRingDim, kQ0, 0);
+
+    void *a = nullptr;
+    void *b = nullptr;
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    DeviceGuard ga(a);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gb(b);
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gdst(dst);
+
+    const std::vector<uint64_t> avec = haze::test::make_residue(modulus, 0x1111ULL, kRingDim);
+    const std::vector<uint64_t> bvec = haze::test::make_residue(modulus, 0x2222ULL, kRingDim);
+    REQUIRE(hazeMemcpy(a, avec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, bvec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    hazeGraph_t g_add = nullptr;
+    {
+        CaptureGuard capture_drain;
+        REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAdd(dst, a, b, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+        REQUIRE(hazeStreamEndCapture(nullptr, &g_add) == HAZE_SUCCESS);
+    }
+    REQUIRE(g_add != nullptr);
+    GraphGuard gg_add(g_add);
+
+    hazeGraphExec_t exec = nullptr;
+    REQUIRE(hazeGraphInstantiate(&exec, g_add) == HAZE_SUCCESS);
+    REQUIRE(exec != nullptr);
+    ExecGuard ge(exec);
+
+    // g_mul writes to the SAME dst address and tags the SAME output; only the
+    // operation differs.
+    hazeGraph_t g_mul = nullptr;
+    {
+        CaptureGuard capture_drain;
+        REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMul(dst, a, b, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+        REQUIRE(hazeStreamEndCapture(nullptr, &g_mul) == HAZE_SUCCESS);
+    }
+    REQUIRE(g_mul != nullptr);
+    GraphGuard gg_mul(g_mul);
+
+    REQUIRE(hazeGraphExecUpdate(exec, g_mul) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
+
+    // The exec still holds its original add topology and replays add semantics.
+    REQUIRE(hazeGraphLaunch(exec, nullptr) == HAZE_SUCCESS);
+    std::vector<uint64_t> out(kRingDim, 0xDEADBEEFULL);
+    REQUIRE(hazeMemcpy(out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    std::vector<uint64_t> expected(kRingDim);
+    for (std::size_t k = 0; k < kRingDim; ++k)
+        expected[k] = haze::test::add_mod(avec[k], bvec[k], modulus);
+    REQUIRE(out == expected);
+
+    REQUIRE(hazeGraphExecDestroy(exec) == HAZE_SUCCESS);
+    ge.release();
+    REQUIRE(hazeGraphDestroy(g_add) == HAZE_SUCCESS);
+    gg_add.release();
+    REQUIRE(hazeGraphDestroy(g_mul) == HAZE_SUCCESS);
+    gg_mul.release();
+}

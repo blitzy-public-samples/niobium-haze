@@ -10,15 +10,20 @@ Haze is a **C++ shared library with a C ABI** — a record-and-replay runtime sh
 | --- | --- | --- |
 | Structured logging with correlation IDs | Tagged log sink extended with structured fields and an epoch/stream correlation ID | [`../../src/common/log.hpp`](../../src/common/log.hpp), [`../../src/common/log.cpp`](../../src/common/log.cpp) |
 | Metrics endpoint | The `hazeGetPerformanceCounters` query surface backed by the `hazePerformanceCounters` struct | [`../../include/haze/haze_types.h`](../../include/haze/haze_types.h), [`../../src/core/metrics.hpp`](../../src/core/metrics.hpp) |
-| Distributed tracing across service boundaries | Op/epoch span tracing across the record to flush to replay path and the `replay_bridge/` OpenFHE boundary | [`../../src/core/epoch.cpp`](../../src/core/epoch.cpp) |
-| Health and readiness checks | Lifecycle and configuration-state introspection | [`../architecture.md`](../architecture.md) |
+| Distributed tracing across service boundaries | Epoch/graph span tracing across the record to flush to replay path, gated by `HAZE_TRACE` | [`../../src/core/epoch.cpp`](../../src/core/epoch.cpp), [`../../src/core/graph.cpp`](../../src/core/graph.cpp) |
+| Health and readiness checks | The `haze::runtime_readiness()` query over lifecycle and configuration state | [`../../src/common/log.hpp`](../../src/common/log.hpp) (declaration), [`../../src/core/epoch.cpp`](../../src/core/epoch.cpp) (definition) |
 | Dashboard template | Grafana-style JSON template over the performance counters | [`./dashboard-template.json`](./dashboard-template.json) |
 
 ## Structured logging and correlation IDs
 
-Haze's existing log surface is a single tagged sink, `haze::log_error(tag, body)`, which writes lines of the form `[haze] <tag>: <body>` to `std::cerr`. The Observability work **extends** this sink with structured fields and a **correlation ID keyed by epoch and stream**, so that log lines emitted while recording, flushing, and replaying a given epoch can be correlated. Existing call sites remain **source-compatible** — no caller has to change to keep working.
+Haze's log surface is a single tagged sink, `haze::log_error(tag, body)`. The Observability work **is wired**: the sink now emits lines of the form `[haze] [cid=<id>] <tag>: <body>` in one line-atomic `std::fwrite` to `stderr`, where `<id>` is the current thread-local **correlation ID** (0 when unset). Correlation IDs are installed per runtime operation via an RAII `CorrelationScope` seeded from `next_correlation_id()` (monotonic, never 0), so every diagnostic emitted while flushing or replaying a given epoch — or launching a graph — shares one ID and can be correlated end to end. Existing call sites remain **source-compatible** — the no-argument `log_error(tag, body)` overload stamps the current thread-local ID automatically, so no caller has to change.
 
-See [`../../src/common/log.hpp`](../../src/common/log.hpp) for the sink declaration.
+Two confidentiality/integrity properties are enforced at emission time:
+
+- **Path redaction.** Body fields are passed through `redact_paths`, which replaces the directory portion of any on-disk path with `<redacted>/` and keeps only the basename, so host filesystem layout (and temp-dir names holding FHE material) is not disclosed.
+- **Field escaping.** Tag and body are passed through `append_escaped`, which renders every newline, C0/C1 control byte, DEL, and non-ASCII byte as a printable `\xNN` escape, so no field can inject a framing break and records never interleave.
+
+On any formatting or write failure the `noexcept` sink emits a fixed, allocation-free dropped-record notice rather than re-emitting the record, so no exception crosses the C ABI. See [`../../src/common/log.hpp`](../../src/common/log.hpp) for the sink declaration and [`../decision-log.md`](../decision-log.md) (D-16, D-28) for the rationale.
 
 ## Metrics: the `hazeGetPerformanceCounters` surface
 
@@ -28,25 +33,32 @@ The aggregator in [`../../src/core/metrics.hpp`](../../src/core/metrics.hpp) col
 
 | Counter field | Meaning | Fed by |
 | --- | --- | --- |
-| `op_count` | Total FHETCH ops emitted (SRP + MRP + basis-convert) | Epoch op emission, [`../../src/core/epoch.cpp`](../../src/core/epoch.cpp) |
+| `op_count` | High-level ops emitted, counted **once per op** regardless of SRP/MRP residue fan-out; device-to-device copies are **not** counted here | Compute op shims [`../../src/core/compute.hpp`](../../src/core/compute.hpp) (add/mul/NTT/automorph, SRP + MRP) and basis-convert [`../../src/core/basis_convert.cpp`](../../src/core/basis_convert.cpp) |
 | `bytes_h2d` | Cumulative host-to-device bytes moved | Allocator copy hooks, [`../../src/core/allocator.cpp`](../../src/core/allocator.cpp) |
 | `bytes_d2h` | Cumulative device-to-host bytes moved | Allocator copy hooks, [`../../src/core/allocator.cpp`](../../src/core/allocator.cpp) |
-| `bytes_d2d` | Cumulative device-to-device bytes moved | Memcpy hooks |
+| `bytes_d2d` | Cumulative device-to-device bytes moved, charged **after a copy succeeds** (SRP and MRP, the latter via the residue count) | Device-to-device memcpy hooks, [`../../src/core/epoch.cpp`](../../src/core/epoch.cpp) |
 | `flush_count` | Number of `hazeFlush()` replay invocations | Epoch flush, [`../../src/core/epoch.cpp`](../../src/core/epoch.cpp) |
 | `flush_time_ns_total` | Cumulative flush/replay wall time (nanoseconds) | Epoch flush timing, [`../../src/core/epoch.cpp`](../../src/core/epoch.cpp) |
 | `flush_time_ns_last` | Most-recent flush/replay wall time (nanoseconds) | Epoch flush timing, [`../../src/core/epoch.cpp`](../../src/core/epoch.cpp) |
 
-The three byte counters correspond one-to-one to `hazeMemcpyKind` (`HOST_TO_DEVICE`, `DEVICE_TO_HOST`, `DEVICE_TO_DEVICE`). The struct definition is in [`../../include/haze/haze_types.h`](../../include/haze/haze_types.h).
+The three byte counters correspond one-to-one to `hazeMemcpyKind` (`HOST_TO_DEVICE`, `DEVICE_TO_HOST`, `DEVICE_TO_DEVICE`). All seven counters are plain `uint64_t` guarded by a single leaf mutex; every mutator, `snapshot()`, and `reset()` takes that lock, so a `hazeGetPerformanceCounters` snapshot never observes a torn read and a `hazeDeviceReset` clears all seven as one indivisible step. Adds **saturate** at `UINT64_MAX` rather than wrapping (a silent wrap would look like a false regression). The struct definition is in [`../../include/haze/haze_types.h`](../../include/haze/haze_types.h); the consistency/overflow/quiescence policy is documented in [`../../src/core/metrics.hpp`](../../src/core/metrics.hpp) and [`../decision-log.md`](../decision-log.md) (D-25).
 
 ## Tracing: op and epoch spans
 
-"Distributed tracing across service boundaries" is reinterpreted as **op/epoch span tracing** across the in-process record to flush to replay path and across the one external boundary Haze has — the `replay_bridge/` OpenFHE isolation layer. A correlation ID identifies the epoch/stream; spans bracket op emission, flush/replay, and the bridge crossing.
+"Distributed tracing across service boundaries" is reinterpreted as **span tracing** across the in-process record to flush to replay path. Each traced runtime operation is bracketed by an RAII `TraceSpan` under a fresh `CorrelationScope`, so the span's begin/end pair and every diagnostic inside it share one correlation ID. Three coarse spans are emitted today (one begin/end pair each):
+
+- `epoch.flush` — the `hazeFlush()` finalize → replay → populate cycle ([`../../src/core/epoch.cpp`](../../src/core/epoch.cpp)), which is also where the crossing into the `replay_bridge/` OpenFHE isolation layer happens.
+- `epoch.write_program` — the record-to-disk path for a captured program ([`../../src/core/epoch.cpp`](../../src/core/epoch.cpp)).
+- `graph.launch` — each replay of an instantiated captured graph ([`../../src/core/graph.cpp`](../../src/core/graph.cpp)).
+
+Span emission is **gated by the `HAZE_TRACE` environment variable**, re-read on each span (see [`../decision-log.md`](../decision-log.md), D-27), so tracing is off by default and can be toggled at runtime — including in-process by a test that drives a real flush and captures the begin/end records. When `HAZE_TRACE` is unset, spans are suppressed but error diagnostics still flow through `log_error` with their correlation ID.
 
 ```mermaid
 graph LR
-    A[record: op emission] -->|epoch/stream correlation id| B[flush]
+    A[record: op emission] -->|correlation id| B["flush (span: epoch.flush)"]
     B --> C[replay]
     C --> D[replay_bridge / OpenFHE boundary]
+    E["graph launch (span: graph.launch)"] --> C
     A -.-> M[metrics aggregator]
     B -.-> M
     C -.-> M
@@ -54,7 +66,7 @@ graph LR
 
 ## Health and readiness
 
-Service health probes are reinterpreted as **lifecycle and configuration-state introspection**: is a device configured, is the backend initialized, is an epoch active? These states are observable through the lifecycle and configuration surfaces described in [`../architecture.md`](../architecture.md).
+Service health probes are reinterpreted as **lifecycle and configuration-state introspection**, exposed as a concrete `haze::runtime_readiness()` query (declared in [`../../src/common/log.hpp`](../../src/common/log.hpp), defined in [`../../src/core/epoch.cpp`](../../src/core/epoch.cpp)). It returns a `RuntimeReadiness` struct reporting whether a device is configured, whether the backend is initialized, and whether an epoch is currently recording. Each sub-state is read under its own leaf lock with **no lock nesting** (see [`../decision-log.md`](../decision-log.md), D-29), so the query introduces no new lock-ordering edge; it is advisory, point-in-time introspection rather than a transactional guarantee. This is an internal `haze::` surface — it adds no new exported C ABI symbol, preserving the symbol-leak audit.
 
 ## The dashboard template
 

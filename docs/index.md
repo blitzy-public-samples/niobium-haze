@@ -35,10 +35,12 @@ graph TD
   the lazy record-and-replay execution model, the replay-bridge boundary, and
   graph capture.
 - [`Building`](./building.md) — prerequisites and the standalone, submodule, and
-  nix build flows, plus the `make bench`, `make coverage`, and CMake option
-  knobs.
-- [`Testing`](./testing.md) — the Catch2 suites and tags, the CTest targets,
-  sanitizer runs, and the 80% line-coverage gate on `src/core/` and `src/api/`.
+  nix build flows, plus the live `make bench` target and CMake option knobs (the
+  `make coverage` target and `HAZE_COVERAGE` option are deferred).
+- [`Testing`](./testing.md) — the Catch2 suites and tags, the CTest targets, and
+  sanitizer builds (`HAZE_SANITIZERS`/`HAZE_TSAN`). The 80% line-coverage gate on
+  `src/core/` and `src/api/` is deferred until the coverage option/target/CI job
+  are wired.
 - [`Decision Log`](./decision-log.md) — the Explainability rationale for every
   non-trivial decision and the bidirectional traceability matrix (Rule 1); it is
   the single source of truth for why a choice was made.

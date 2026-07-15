@@ -252,6 +252,8 @@
     .stack .intro-row .side ul.clean { margin: 0; }
     .stack .mermaid { margin-top: 4px; }
     .reveal .stack .mermaid svg { max-height: 700px; }
+    /* Sandbox security level renders each diagram inside an <iframe> (D-33); size it like the svg. */
+    .reveal .stack .mermaid iframe { max-height: 700px; }
     .lead { font-size: 28px; color: var(--text); line-height: 1.5; }
     .lead .muted, .muted { color: var(--muted); }
     ul.clean { list-style: none; padding: 0; margin: 10px 0 0; }
@@ -272,6 +274,8 @@
     /* Mermaid containment so diagrams fit the 1080px canvas */
     .reveal .mermaid { display: flex; justify-content: center; }
     .reveal .mermaid svg { max-width: 100% !important; height: auto !important; max-height: 820px; }
+    /* Sandbox iframe (D-33): Mermaid sets an inline width:100%/height:<px>; cap it to the canvas. */
+    .reveal .mermaid iframe { max-width: 100% !important; width: 100% !important; max-height: 820px; border: 0; background: transparent; }
     /* Mermaid loads from a pinned CDN; unprocessed nodes stay hidden until rendered or given a fallback caption. Rationale: decision log D-13. */
     .reveal .mermaid:not([data-processed]) { visibility: hidden; }
     .mermaid-fallback {
@@ -386,9 +390,9 @@ graph LR
         <h2 class="slide-title">Advance libhaze from partially-stubbed toward fully-realized</h2>
         <p class="lead muted" style="margin-bottom:26px;">Implement features, add benchmarking, gate coverage, and complete documentation — without changing the public C ABI, the record-and-replay architecture, the symbol-leak isolation, or the three intentional no-ops.</p>
         <div class="tile-grid cols-4">
-          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="blocks"></i></span><h3>Feature completion</h3></div><p>Graph capture, peer access, and performance counters — planned where the record-and-replay model permits.</p></div>
+          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="blocks"></i></span><h3>Feature completion</h3></div><p>Graph capture, peer access, and performance counters — delivered where the record-and-replay model permits.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="gauge"></i></span><h3>Benchmarking</h3></div><p>A Google Benchmark harness with a CI regression gate.</p></div>
-          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="shield-check"></i></span><h3>Coverage gate</h3></div><p>An 80% line-coverage threshold on the core and API layers.</p></div>
+          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="shield-check"></i></span><h3>Coverage gate</h3></div><p>An 80% line-coverage threshold on the core and API layers <em>(gate deferred)</em>.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="book-open"></i></span><h3>Docs &amp; examples</h3></div><p>A documentation tree plus runnable examples.</p></div>
         </div>
         <div class="footer"><span>Haze · libhaze</span><span class="fbrand wordmark">Blitzy</span></div>
@@ -401,12 +405,12 @@ graph LR
         <table class="brand">
           <thead><tr><th style="width:130px;">Tier</th><th style="width:360px;">Workstream</th><th>Outcome</th></tr></thead>
           <tbody>
-            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P1</span></span></td><td>Graph capture</td><td>record-once / replay-many (planned)</td></tr>
+            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P1</span></span></td><td>Graph capture</td><td>record-once / replay-many (delivered)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P1</span></span></td><td>Benchmarking</td><td>Google Benchmark + <span class="mono">make bench</span> + CI regression gate</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Peer access</td><td>simulator-only (physical multi-chip = human follow-up)</td></tr>
-            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Performance counters</td><td>additive counters via the API (planned)</td></tr>
-            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Coverage</td><td>80% line-coverage gate on <span class="mono">src/core/</span> + <span class="mono">src/api/</span></td></tr>
-            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Tests</td><td>backfill + nine hardening categories under sanitizers</td></tr>
+            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Performance counters</td><td>additive counters via the API (delivered)</td></tr>
+            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Coverage</td><td>80% line-coverage gate on <span class="mono">src/core/</span> + <span class="mono">src/api/</span> (deferred)</td></tr>
+            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Tests</td><td>backfill + nine hardening categories under sanitizers (delivered)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P3</span></span></td><td>Docs &amp; examples</td><td><span class="mono">docs/</span> tree + runnable <span class="mono">examples/</span></td></tr>
           </tbody>
         </table>
@@ -419,7 +423,7 @@ graph LR
         <h2 class="slide-title">Record-once, replay-many — the highest priority</h2>
         <div class="stack">
           <div class="intro-row">
-            <p class="lead">Seven functions that today return <span class="muted">"not supported"</span> are planned to become <strong>record-once / replay-many</strong> via an epoch-trace snapshot in a new internal graph module — tests for this contract are specified now; the runtime lands in a later PR.</p>
+            <p class="lead">Seven functions that previously returned <span class="muted">"not supported"</span> are now <strong>record-once / replay-many</strong> via an epoch-trace snapshot in a new internal graph module — implemented and verified by the graph-capture test suite.</p>
             <div class="side">
               <ul class="clean">
                 <li>Mirrors CUDA stream-capture / instantiate / launch.</li>
@@ -449,7 +453,7 @@ graph LR
         <h2 class="slide-title">Measurement and regression detection — not tuning</h2>
         <div class="split">
           <div>
-            <p class="lead">A <strong>Google Benchmark</strong> harness is planned to cover the FHE ops <strong>add, mul, NTT, automorph</strong> (SRP + MRP) plus the <strong>record → flush → replay</strong> path.</p>
+            <p class="lead">A <strong>Google Benchmark</strong> harness covers the FHE ops <strong>add, mul, NTT, automorph</strong> (SRP + MRP) plus the <strong>record → flush → replay</strong> path, runnable via <span class="mono">make bench</span>.</p>
             <div class="tile-grid cols-3" style="margin-top:22px;">
               <div class="metric"><span class="cap"><i data-lucide="terminal"></i></span><div class="num grad-text" style="font-size:36px; font-family: var(--font-mono);">make bench</div><div class="label">one-command run</div></div>
               <div class="metric"><span class="cap"><i data-lucide="git-pull-request"></i></span><div class="num grad-text" style="font-size:40px;">CI</div><div class="label">regression gate vs baseline</div></div>
@@ -487,10 +491,10 @@ graph LR
       <!-- Slide 8: P2a Peer access - simulator only -->
       <section>
         <p class="eyebrow"><span class="accent">Priority 2</span> · Peer access</p>
-        <h2 class="slide-title">Simulator-representable behavior (planned scope)</h2>
+        <h2 class="slide-title">Simulator-representable behavior (delivered)</h2>
         <div class="stack">
           <div class="intro-row">
-            <p class="lead">Peer-access entry points are <strong>planned</strong> for the simulator's representable behavior — a peer-topology model plus peer copy. The build models a single device today; tests for the peer contract are specified now, and the runtime lands in a later PR.</p>
+            <p class="lead">Peer-access entry points are <strong>implemented</strong> for the simulator's representable behavior — a peer-topology model plus peer copy. The build models a single device today; the peer contract is verified by the peer-access test suite. Physical multi-chip validation remains human follow-up.</p>
             <div class="side">
               <ul class="clean">
                 <li>Gated behind a dedicated hardware test tag, so the default suite stays green.</li>
@@ -500,7 +504,7 @@ graph LR
           </div>
           <div class="mermaid">
 graph LR
-  D0["Simulated Device 0&lt;br/&gt;(single device today)"] -.->|"peer-access entry points (planned)"| P["Peer-topology model&lt;br/&gt;+ peer copy"]
+  D0["Simulated Device 0&lt;br/&gt;(single device today)"] -->|"peer-access entry points (delivered)"| P["Peer-topology model&lt;br/&gt;+ peer copy"]
   P -.->|"requires hardware"| H["Physical multi-chip&lt;br/&gt;human follow-up"]
   classDef warn fill:#2A2413,stroke:#FBBF24,stroke-width:2px,color:#FBBF24;
   class H warn;
@@ -514,7 +518,7 @@ graph LR
       <section>
         <p class="eyebrow"><span class="accent">Priority 2</span> · Performance counters</p>
         <h2 class="slide-title">Telemetry through a strictly additive struct</h2>
-        <p class="lead muted" style="margin-bottom:8px;">A new <span class="mono">hazePerformanceCounters</span> struct — to be populated by a metrics aggregator — will let <span class="mono">hazeGetPerformanceCounters</span> report real data. Tests for this contract are specified now; the aggregator lands in a later PR. The public C ABI stays stable (the struct is strictly additive).</p>
+        <p class="lead muted" style="margin-bottom:8px;">A new <span class="mono">hazePerformanceCounters</span> struct — populated by a metrics aggregator — lets <span class="mono">hazeGetPerformanceCounters</span> report real data. The contract is verified by the performance-counter test suite. The public C ABI stays stable (the struct is strictly additive).</p>
         <div style="margin:14px 0 24px;"><span class="badge ok"><i data-lucide="shield-check"></i>ABI: additive only</span></div>
         <div class="tile-grid cols-3">
           <div class="metric"><span class="cap"><i data-lucide="list-checks"></i></span><div class="num grad-text">Op counts</div><div class="label">operations recorded per epoch</div></div>
@@ -527,14 +531,16 @@ graph LR
       <!-- Slide 10: P2c Coverage and the 80% gate -->
       <section>
         <p class="eyebrow"><span class="accent">Priority 2</span> · Coverage</p>
-        <h2 class="slide-title">An 80% line-coverage gate, sequenced sensibly</h2>
+        <h2 class="slide-title">An 80% line-coverage gate — deferred, sequenced sensibly</h2>
         <div class="split">
           <div>
             <p class="lead">Clang source-based coverage (<span class="mono">llvm-profdata</span> + <span class="mono">llvm-cov</span>) — already in the toolchain, <strong>no new runtime dependency</strong>.</p>
+            <div style="margin:6px 0 10px;"><span class="badge warn"><i data-lucide="flag"></i>Deferred — measurement scripted; target, option, and CI gate not yet wired</span></div>
             <ul class="clean">
               <li>Scoped to <span class="mono">src/core/</span> + <span class="mono">src/api/</span>.</li>
-              <li>A CI gate will enforce <strong>80% line coverage</strong> (planned).</li>
-              <li>Switched on <strong>after</strong> backfill and hardening raise coverage — so it never gates the branch red before coverage exists.</li>
+              <li>A CI gate will enforce <strong>80% line coverage</strong> <strong>(deferred — not yet wired)</strong>.</li>
+              <li>The coverage driver is scripted (<span class="mono">scripts/coverage.sh</span>); the <span class="mono">make coverage</span> target, <span class="mono">HAZE_COVERAGE</span> option, and CI gate are deferred.</li>
+              <li>Sequenced <strong>after</strong> backfill and hardening raise coverage — so it never gates the branch red before coverage exists.</li>
             </ul>
           </div>
           <div class="chart-wrap" style="display:flex;flex-direction:column;align-items:center;">
@@ -566,7 +572,7 @@ graph LR
       <section>
         <p class="eyebrow"><span class="accent">Priority 2</span> · Tests</p>
         <h2 class="slide-title">Backfill to full coverage, then harden</h2>
-        <p class="lead muted" style="margin-bottom:12px;">Backfill the remaining public functions (~54 of 77 exercised today &#8594; target all 77) and add nine categories of negative / boundary hardening tests under ASan / UBSan / TSan. Eight categories are specified this checkpoint; allocator-limits is deferred to a later PR.</p>
+        <p class="lead muted" style="margin-bottom:12px;">Backfill the public API beyond the ~54 of 77 exercised at the outset and add nine categories of negative / boundary hardening tests under ASan / UBSan / TSan. All nine categories are delivered — including allocator-limits — and run in the default suite.</p>
         <div class="chart-wrap" style="margin-bottom:22px;">
           <div class="prog-row">
             <span class="prog-l">public API coverage</span>
@@ -588,7 +594,7 @@ graph LR
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="alarm-clock"></i></span><h3 style="font-size:23px;">Unflushed reads</h3></div>
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="git-compare"></i></span><h3 style="font-size:23px;">Device vs shadow pointer</h3></div>
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="settings"></i></span><h3 style="font-size:23px;">Configuration errors</h3></div>
-          <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="database"></i></span><h3 style="font-size:23px;">Allocator limits <span class="muted" style="font-size:16px;">(deferred)</span></h3></div>
+          <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="database"></i></span><h3 style="font-size:23px;">Allocator limits <span class="muted" style="font-size:16px;">(delivered)</span></h3></div>
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="triangle-alert"></i></span><h3 style="font-size:23px;">Error-state semantics</h3></div>
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="shield"></i></span><h3 style="font-size:23px;">ABI exception safety</h3></div>
           <div class="tile" style="padding:16px 18px;flex-direction:row;align-items:center;gap:14px;"><span class="tile-icon" style="width:48px;height:48px;"><i data-lucide="lock"></i></span><h3 style="font-size:23px;">Lock ordering / concurrency</h3></div>
@@ -637,6 +643,7 @@ graph TD
           <div>
             <p class="lead">Because Haze is a C shared library — not a network service — the observability rule is <strong>mapped to the library context</strong> (a deviation recorded in the decision log).</p>
             <ul class="clean">
+              <li>All four mapped surfaces are <strong>implemented and verified</strong> by the observability tests.</li>
               <li>The three no-op functions stay pure and uninstrumented.</li>
             </ul>
           </div>
@@ -673,7 +680,7 @@ graph LR
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-branch"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Record-and-replay intact</h3><p><span class="mono">hazeFlush</span> remains the sole materialization trigger.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="circle-check"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Three no-ops unchanged</h3><p>Smoke-tested, not reimplemented.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="box"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>OpenFHE confined</h3><p>Stays within the replay bridge boundary.</p></div>
-          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-merge"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>CI stays green</h3><p>Seven existing workflows untouched; three new jobs planned alongside them.</p></div>
+          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-merge"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Existing CI untouched</h3><p>Seven existing workflows untouched; one advisory benchmark job added; coverage and sanitizer jobs deferred.</p></div>
         </div>
         <div class="footer"><span>Haze · libhaze</span><span class="fbrand wordmark">Blitzy</span></div>
       </section>
@@ -681,12 +688,12 @@ graph LR
       <!-- Slide 15: Roadmap and human follow-up -->
       <section>
         <p class="eyebrow"><span class="accent">Delivery</span> · Roadmap</p>
-        <h2 class="slide-title">Logical sequence, delivered per pull request</h2>
+        <h2 class="slide-title">Logical sequence, delivered on one integrated branch</h2>
         <div class="timeline">
           <div class="track"></div>
           <div class="nodes">
             <div class="node"><span class="dot"><i data-lucide="git-graph"></i></span><span class="step"><b>Graph-capture foundation</b>epoch snapshot + core module</span></div>
-            <div class="node"><span class="dot"><i data-lucide="gauge"></i></span><span class="step"><b>Measurement infra</b>benchmarks + coverage</span></div>
+            <div class="node"><span class="dot"><i data-lucide="gauge"></i></span><span class="step"><b>Measurement infra</b>benchmarks · coverage deferred</span></div>
             <div class="node"><span class="dot"><i data-lucide="layers"></i></span><span class="step"><b>Remaining features</b>peer access + counters</span></div>
             <div class="node"><span class="dot"><i data-lucide="microscope"></i></span><span class="step"><b>Raise coverage</b>backfill + hardening</span></div>
             <div class="node"><span class="dot"><i data-lucide="shield-check"></i></span><span class="step"><b>Enable 80% gate</b>after coverage exists</span></div>
@@ -696,7 +703,7 @@ graph LR
         <div class="followup">
           <span class="badge warn"><i data-lucide="flag"></i>Human follow-up: physical multi-chip hardware validation (peer access)</span>
         </div>
-        <p class="muted" style="text-align:center;font-size:22px;margin-top:26px;">Delivered per-PR with tests, green CI, and decision-log entries.</p>
+        <p class="muted" style="text-align:center;font-size:22px;margin-top:26px;">Delivered on a single integrated branch with tests and decision-log entries.</p>
         <div class="footer"><span>Haze · libhaze</span><span class="fbrand wordmark">Blitzy</span></div>
       </section>
 
@@ -705,7 +712,7 @@ graph LR
         <div class="brand-wrap">
           <div class="hero-band">
             <div class="lockup"><span class="icon-chip lg"><i data-lucide="zap"></i></span></div>
-            <h2 style="font-size:48px;margin:20px 0 12px;max-width:1300px;">A CUDA-shaped FHE runtime — on track to be benchmarked, coverage-gated, and documented, with its public ABI intact.</h2>
+            <h2 style="font-size:48px;margin:20px 0 12px;max-width:1300px;">A CUDA-shaped FHE runtime — benchmarked and documented, with its public ABI intact; coverage-gating deferred.</h2>
             <div class="hero-rule"></div>
             <p class="lead muted" style="margin-top:20px;">Three user-rule deliverables in place: the decision log (Explainability), observability design with structured logging (Observability), and this deck (Executive Presentation).</p>
           </div>
@@ -754,13 +761,36 @@ graph LR
     // Load Mermaid (ESM-only in v11) via dynamic import() after reveal init, inside try/catch.
     // Rationale: decision log D-13.
     const nodes = [...document.querySelectorAll('.mermaid')];
+
+    // --- S1 security hardening (decision log D-33) ---
+    // Mermaid 11.4.0 is a frozen, Rule 3-pinned dependency with a known
+    // HTML/DOM-injection class of issues under interactive security levels. We
+    // render every diagram in the official sandboxed <iframe> mode, which the
+    // upstream advisory (GHSA-ghcm-xqfw-q4vr) names as the mitigation: the
+    // iframe carries no allow-scripts, so no JavaScript from a diagram can run
+    // in the deck's context. All diagram definitions in this deck are FIXED and
+    // TRUSTED (static text authored in this file, never user-supplied).
+    const MERMAID_SECURITY_LEVEL = 'sandbox';
+    // Regression guard 1: refuse any interactive/unsafe security level. If a
+    // future edit lowers this to 'loose'/'antiscript', fail loudly and fall
+    // back to captions rather than silently re-opening the XSS vector.
+    const MERMAID_LEVEL_SAFE = (MERMAID_SECURITY_LEVEL === 'sandbox' || MERMAID_SECURITY_LEVEL === 'strict');
+    // Regression guard 2: the trusted-definition invariant. Static definitions
+    // must not carry interactive click/script directives; if one ever does,
+    // treat it as a regression and drop that diagram to a caption instead of
+    // rendering it, independent of the sandbox isolation above.
+    const UNSAFE_DEF = /\bclick\b|javascript:|<script|href\s+["']javascript:/i;
+
     try {
+      if (!MERMAID_LEVEL_SAFE) {
+        throw new Error('Mermaid securityLevel regression: refusing non-sandbox level "' + MERMAID_SECURITY_LEVEL + '"');
+      }
       const { default: mermaid } = await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.0/dist/mermaid.esm.min.mjs');
 
       mermaid.initialize({
         startOnLoad: false,
         theme: 'base',
-        securityLevel: 'loose',
+        securityLevel: MERMAID_SECURITY_LEVEL,
         themeVariables: {
           background: '#0B0E14',
           primaryColor: '#171D2E',
@@ -780,9 +810,21 @@ graph LR
         flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true }
       });
 
-      // Render each diagram to an SVG string and inject it; on a per-diagram failure inject a caption.
+      // Render each diagram and inject the result. In sandbox mode mermaid.render()
+      // returns a self-isolating <iframe> (sandbox, no allow-scripts) rather than a
+      // bare <svg>, so the injected markup cannot execute script in the deck context.
+      // On a per-diagram failure inject a caption.
       for (let i = 0; i < nodes.length; i++) {
         const def = nodes[i].textContent.trim();
+        // Regression guard 2 (trusted-definition invariant): a static definition must
+        // never carry interactive click/script directives. If one does, drop to a
+        // caption instead of rendering — independent of the sandbox isolation above.
+        if (UNSAFE_DEF.test(def)) {
+          console.error('Mermaid definition rejected (interactive/script directive) for diagram', i);
+          nodes[i].innerHTML = '<div class="mermaid-fallback">Diagram unavailable</div>';
+          nodes[i].setAttribute('data-processed', 'true');
+          continue;
+        }
         try {
           const { svg } = await mermaid.render('mmd-' + i, def);
           nodes[i].innerHTML = svg;

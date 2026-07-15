@@ -23,6 +23,7 @@
 #include "core/config.hpp"
 #include "core/device.hpp"
 #include "core/epoch.hpp"
+#include "core/graph.hpp"
 #include "core/stream.hpp"
 
 #include <haze/haze.h>
@@ -35,6 +36,9 @@ namespace haze {
 void reset_all() noexcept {
     // Clear all internal state first, since we may depend on external object state when clearing
     // otherwise.
+    // Drop live graphs/execs first: they are the highest-level constructs and
+    // own on-disk trace copies that must be reclaimed on a device reset.
+    graph_reset();
     epoch().reset();
     backend().reset();
     allocator().reset();

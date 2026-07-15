@@ -126,16 +126,25 @@ clean under both `HAZE_SANITIZERS` and `HAZE_TSAN`.
 
 ## Code coverage
 
-Coverage uses Clang source-based instrumentation, gated behind the
-`HAZE_COVERAGE` CMake option. The `make coverage` target configures, builds,
-runs the suite, and produces the report in one step:
+> **Status: deferred.** The coverage *driver script*
+> [`../scripts/coverage.sh`](../scripts/coverage.sh) is present, but the
+> `HAZE_COVERAGE` CMake option, the `make coverage` target, and the coverage CI
+> gate are **not yet wired** (`make coverage` currently fails, and
+> `-DHAZE_COVERAGE=ON` is not a recognised option). The workflow below is the
+> planned design; it is documented so the approach is reviewable and will be
+> published as live only once the option, target, and workflow are implemented
+> and verified.
+
+The intended design uses Clang source-based instrumentation, gated behind a
+`HAZE_COVERAGE` CMake option. A `make coverage` target would configure, build,
+run the suite, and produce the report in one step:
 
 ```sh
-make coverage
+make coverage        # planned; not yet available
 ```
 
-To drive it manually, configure the option into a dedicated tree and run
-`scripts/coverage.sh`:
+Driven manually, the option would be configured into a dedicated tree, then
+`scripts/coverage.sh` run against it:
 
 ```sh
 cmake -S . -B build-coverage -DCMAKE_BUILD_TYPE=Debug -DHAZE_COVERAGE=ON
@@ -143,7 +152,7 @@ cmake --build build-coverage -j
 scripts/coverage.sh
 ```
 
-`HAZE_COVERAGE` compiles the tree with `-fprofile-instr-generate
+`HAZE_COVERAGE` would compile the tree with `-fprofile-instr-generate
 -fcoverage-mapping`. Running the instrumented `haze_tests` emits one or more
 `*.profraw` files, which `scripts/coverage.sh` merges and exports as lcov,
 scoped to the two trees the threshold applies to:
@@ -154,17 +163,19 @@ llvm-cov export -format=lcov -instr-profile=haze.profdata \
     ./build-coverage/haze_tests src/core src/api > coverage.lcov
 ```
 
-The coverage CI job enforces an **80% line-coverage threshold** on `src/core/`
-and `src/api/`; a report below the threshold fails the job. The gate was
-enabled only after the backfill and hardening tests raised coverage to clear
-it. An HTML report is optional via `lcov`'s `genhtml`:
+Once wired, a coverage CI job would enforce an **80% line-coverage threshold**
+on `src/core/` and `src/api/`, failing the job below it. The gate is
+intentionally sequenced to be enabled only after the backfill and hardening
+tests raised coverage to clear it, so turning it on does not retroactively redden
+the branch. An HTML report is optional via `lcov`'s `genhtml`:
 
 ```sh
 genhtml coverage.lcov --output-directory coverage-html
 ```
 
 The rationale for Clang source-based coverage over `gcov`, and for sequencing
-the gate after the backfill, lives in [`./decision-log.md`](./decision-log.md).
+the gate after the backfill, lives in [`./decision-log.md`](./decision-log.md)
+(D-02, D-06, D-10).
 
 ## Docs-as-tests and symbol isolation
 
@@ -235,15 +246,18 @@ not-supported paths — and are exercised under the sanitizers:
 The seven existing workflows in `.github/workflows/` — `build-matrix.yml`,
 `build-test.yml`, `clang-format.yml`, `flake-check.yml`, `openfhe-bump.yml`,
 `pr-claude-code-review.yml`, and `scanoss.yml` — remain green and unchanged.
-This initiative adds new jobs alongside them:
+This initiative adds one new job alongside them, and two more are planned:
 
-- `.github/workflows/coverage.yml` — builds instrumented, produces the coverage
-  report, and enforces the 80% line-coverage gate on `src/core/` and
-  `src/api/`.
-- `.github/workflows/benchmark.yml` — runs the benchmark suite and flags
-  regressions against the checked-in baseline.
-- `.github/workflows/sanitizers.yml` — optional ASan/UBSan and TSan runs of the
-  hardening tests.
+- `.github/workflows/benchmark.yml` — **live.** Runs the benchmark suite and
+  flags regressions against the checked-in baseline.
+- `.github/workflows/coverage.yml` — **deferred (not yet in the tree).** Would
+  build instrumented, produce the coverage report, and enforce the 80%
+  line-coverage gate on `src/core/` and `src/api/`, once the `HAZE_COVERAGE`
+  option and `make coverage` target are wired (see the coverage note above).
+- `.github/workflows/sanitizers.yml` — **deferred (not yet in the tree).** Would
+  run ASan/UBSan and TSan over the hardening tests. The `HAZE_SANITIZERS` and
+  `HAZE_TSAN` build options already exist and can be exercised locally in the
+  meantime.
 
 ## See also
 

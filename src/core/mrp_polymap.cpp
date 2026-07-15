@@ -17,6 +17,7 @@
 #include "common/handle.hpp"
 #include "core/allocator.hpp"
 #include "core/epoch.hpp"
+#include "core/metrics.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -100,27 +101,55 @@ std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const 
     return {};
 }
 
-std::expected<void, HazeInternalError> copy_device_to_device_mrp(void *const *dst,
-                                                                 const void *const *src,
-                                                                 const uint64_t *base,
-                                                                 std::size_t len) noexcept {
+std::expected<void, HazeInternalError>
+copy_device_to_device_mrp(void *const *dst, const void *const *src, std::size_t count,
+                          const uint64_t *base, std::size_t len) noexcept {
     // Per-residue pass-through copy, then register the dst as an MRP output
     // group under the real base[i] so it reads back as an MRP, matching the
     // arithmetic MRP ops.
-    EpochSession session;
+    //
+    // Validate EVERYTHING before recording, so an invalid MRP D2D is never
+    // partially recorded or metered (M1/P3, mirroring the SRP D2D path):
+    //   1. The byte count (bytes-per-residue): a D2D is a whole-polynomial
+    //      value copy, so the only supported count is exactly one polynomial.
+    //   2. Destination liveness: every dst[i] must be a currently-live
+    //      allocation, checked up front (all addresses are known before any
+    //      recording) so a bad residue can never leave earlier residues
+    //      recorded in the epoch.
+    const std::size_t poly_bytes = allocator().polynomial_size();
+    if (poly_bytes == 0)
+        return std::unexpected(HazeInternalError::NotConfigured);
+    if (count != poly_bytes)
+        return std::unexpected(HazeInternalError::InvalidArgument);
+
     std::vector<DevAddr> addrs;
     addrs.reserve(len);
     for (std::size_t i = 0; i < len; ++i) {
         DevAddr d = to_dev_addr(dst[i]);
-        if (auto copied = epoch().copy_result_locked(d, to_dev_addr(src[i]), base[i]); !copied)
-            return copied;
+        // A never-allocated / freed destination has generation 0; reject
+        // before any op is recorded so nothing is charged onto it.
+        if (allocator().generation_of(d) == 0)
+            return std::unexpected(HazeInternalError::UnknownAddress);
         addrs.push_back(d);
+    }
+
+    EpochSession session;
+    for (std::size_t i = 0; i < len; ++i) {
+        if (auto copied = epoch().copy_result_locked(addrs[i], to_dev_addr(src[i]), base[i]);
+            !copied)
+            return copied;
     }
     if (len > 1) {
         auto group_name = epoch().mrp_group_name_locked(/*output=*/true, addrs.front());
-        return epoch().register_mrp_output_group_locked(addrs, std::span(base, len),
-                                                        std::move(group_name));
+        if (auto reg = epoch().register_mrp_output_group_locked(addrs, std::span(base, len),
+                                                                std::move(group_name));
+            !reg)
+            return reg;
     }
+    // Meter the whole MRP transfer only after every residue copied and the
+    // group registered successfully: `count` bytes per residue x `len`
+    // residues, mirroring the per-residue MRP H2D/D2H accounting (M1).
+    metrics().add_bytes_d2d(static_cast<uint64_t>(count) * static_cast<uint64_t>(len));
     return {};
 }
 

@@ -4,11 +4,12 @@
     "counter_source_struct": "hazePerformanceCounters",
     "counter_query_function": "hazeGetPerformanceCounters",
     "counter_reset_semantics": "cumulative since process start or the most recent hazeDeviceReset()",
+    "counter_consistency_semantics": "hazeGetPerformanceCounters returns a COHERENT snapshot of all seven fields at one instant (no torn read); hazeDeviceReset zeroes all seven as one indivisible step. Adds SATURATE at UINT64_MAX rather than wrapping. See src/core/metrics.hpp and docs/decision-log.md (D-25). Panels showing per-second rates should account for saturation and for resets appearing as counter drops to zero.",
     "fields": {
-      "op_count": "total FHETCH ops emitted (SRP + MRP + basis-convert)",
-      "bytes_h2d": "cumulative host-to-device bytes moved",
-      "bytes_d2h": "cumulative device-to-host bytes moved",
-      "bytes_d2d": "cumulative device-to-device bytes moved",
+      "op_count": "high-level ops emitted (add/mul/NTT/automorph SRP+MRP and basis-convert), counted ONCE per op regardless of MRP residue fan-out; device-to-device copies are NOT counted here",
+      "bytes_h2d": "cumulative host-to-device bytes moved (allocator copy hooks)",
+      "bytes_d2h": "cumulative device-to-host bytes moved (allocator copy hooks)",
+      "bytes_d2d": "cumulative device-to-device bytes moved, charged only after a copy succeeds (SRP and MRP, the latter across its residue count)",
       "flush_count": "number of hazeFlush() replay invocations",
       "flush_time_ns_total": "cumulative flush/replay wall time (nanoseconds)",
       "flush_time_ns_last": "most-recent flush/replay wall time (nanoseconds)"
@@ -47,8 +48,8 @@
     {
       "id": 1,
       "type": "timeseries",
-      "title": "Op Count — total FHETCH ops emitted",
-      "description": "hazePerformanceCounters.op_count: total FHETCH ops emitted (SRP + MRP + basis-convert). The per-op-type series uses the templated ${op_type} label (add/mul/NTT/automorph/basis-convert); the aggregate op_count is the shipped ABI counter, the op_type split is a dashboard-side label dimension the exporter may attach.",
+      "title": "Op Count — high-level ops emitted",
+      "description": "hazePerformanceCounters.op_count: high-level ops emitted, counted ONCE per op regardless of MRP residue fan-out (an MRP add is one op, not one-per-residue), and EXCLUDING device-to-device copies (those advance bytes_d2d only). Fed from the compute op shims (src/core/compute.hpp) and basis-convert (src/core/basis_convert.cpp). The aggregate op_count is the shipped ABI counter; the per-op-type ${op_type} split (add/mul/NTT/automorph/basis-convert) is a dashboard-side label dimension the exporter may attach — the struct exposes only the single aggregate field.",
       "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "fieldConfig": {
@@ -81,7 +82,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Bytes Moved by Direction",
-      "description": "hazePerformanceCounters.bytes_h2d / bytes_d2h / bytes_d2d: cumulative bytes moved host-to-device, device-to-host, and device-to-device. Byte counts fed by the src/core/allocator.cpp and memcpy hooks.",
+      "description": "hazePerformanceCounters.bytes_h2d / bytes_d2h / bytes_d2d: cumulative bytes moved per direction, one-to-one with hazeMemcpyKind. bytes_h2d and bytes_d2h are fed by the allocator copy hooks (src/core/allocator.cpp); bytes_d2d is charged by the device-to-device memcpy hooks (src/core/epoch.cpp) only AFTER a copy succeeds, covering both SRP and MRP (the latter across its residue count). Invalid or rejected copies are not metered.",
       "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "fieldConfig": {

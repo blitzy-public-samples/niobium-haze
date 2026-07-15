@@ -58,6 +58,11 @@ class Config {
     uint64_t ring_dim() const noexcept;
     uint64_t modulus(int idx) const noexcept;
 
+    // True once configure_device() has completed successfully (and until the
+    // next reset()). Read-only lifecycle-state introspection backing the
+    // observability readiness surface (haze::runtime_readiness()).
+    bool configured() const noexcept;
+
     // Program / target metadata fed to the compiler during init. Defaults:
     // name="haze", version="0.1", description="HAZE runtime", target=kLocalTarget.
     std::expected<void, HazeInternalError> set_program_info(const char *name, const char *version,

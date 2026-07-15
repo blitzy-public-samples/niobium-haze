@@ -31,12 +31,18 @@ extern "C" {
 // epoch, compiler backend, configuration, streams, events, active
 // device) AND the thread-local last-error flag. Mirrors cudaDeviceReset.
 //
-// hazeDeviceEnablePeerAccess and hazeDeviceCanAccessPeer are implemented for
-// the simulator-representable peer topology: peer relationships are modelled
-// in the core device layer for the in-process simulator, so enabling and
-// querying peer access succeed against that model. Physical multi-chip
-// hardware validation is human follow-up and is not exercised by the default
-// build or test suite.
+// hazeDeviceEnablePeerAccess and hazeDeviceCanAccessPeer model a
+// fully-connected peer topology over the valid device ordinals. A device is
+// never its own peer, so hazeDeviceCanAccessPeer reports can_access == 0 for
+// device == peer and HAZE_ERROR_INVALID_VALUE for an out-of-range ordinal; any
+// two DISTINCT valid devices are mutually accessible. hazeDeviceEnablePeerAccess
+// rejects a non-zero flags value, an out-of-range peer, and the active device
+// as its own peer, and otherwise enables access to a distinct peer. On the
+// single-device simulator (hazeGetDeviceCount == 1) the only in-range ordinal
+// is 0, so no distinct peer exists: (0,0) queries report "not a peer" and every
+// enable attempt returns HAZE_ERROR_INVALID_VALUE. The enabled-distinct-peer
+// path is reachable only on physical multi-chip hardware, which is human
+// follow-up and is not exercised by the default build or test suite.
 
 HAZE_API hazeError_t hazeGetDeviceCount(int *count) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetDevice(int device) HAZE_NOEXCEPT;
@@ -63,10 +69,18 @@ HAZE_API hazeError_t hazeDeviceCanAccessPeer(int *can_access, int device, int pe
 // execution engine. Stream-relative ordering is meaningless until
 // hazeFlush() materializes the recorded program. hazeMallocAsync,
 // hazeFreeAsync, hazeMemcpyAsync, and hazeMemsetAsync behave identically
-// to their sync counterparts. hazeMemcpyPeerAsync is an implemented
-// simulator-representable peer copy: it records a device-to-device copy
-// across the simulated peer topology modelled in the core device layer;
-// physical multi-chip hardware validation is human follow-up and is not
+// to their sync counterparts. hazeMemcpyPeerAsync records a device-to-device
+// copy after validating its arguments in order: null dst/src or an
+// out-of-range device ordinal returns HAZE_ERROR_INVALID_VALUE; a copy between
+// distinct devices additionally requires peer access to have been enabled
+// (HAZE_ERROR_INVALID_VALUE otherwise), while a same-device copy needs no
+// authorization; the destination must be a live allocation and `count` must
+// equal the configured polynomial size, and the source is then promoted
+// through the recorded copy (an unmapped source returns
+// HAZE_ERROR_UNKNOWN_ADDRESS, an allocated-but-never-written source returns
+// HAZE_ERROR_SOURCE_UNAVAILABLE). On the single-device simulator only the
+// same-device copy is representable; the enabled distinct-peer copy is
+// reachable only on physical multi-chip hardware (human follow-up), not
 // exercised by the default build or test suite.
 //
 // hazePointerGetAttributes returns HAZE_SUCCESS for any non-null
@@ -401,6 +415,14 @@ HAZE_API hazeError_t hazeGraphDestroy(hazeGraph_t graph) HAZE_NOEXCEPT;
 // cumulative and most-recent flush/replay timings since process start or
 // the last hazeDeviceReset(). Returns HAZE_ERROR_INVALID_VALUE if
 // `counters` is NULL.
+//
+// Buffer contract: `counters` must point to at least
+// sizeof(hazePerformanceCounters) writable bytes. The snapshot is copied
+// byte-wise into that buffer, so no particular alignment is assumed or
+// required; passing the address of a hazePerformanceCounters object
+// satisfies both the size and alignment expectations. The write is
+// coherent: every field reflects the same instant, and the buffer is
+// written only on HAZE_SUCCESS.
 
 HAZE_API hazeError_t hazeGetPerformanceCounters(void *counters) HAZE_NOEXCEPT;
 

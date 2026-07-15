@@ -105,7 +105,13 @@ to build into `dbuild/` instead.
 | `make test-isolation` | Assert `libhaze` exports only the `haze*` C ABI (the symbol-leak check). |
 | `make test-all` | `make test` plus `test-readme` and the opt-in `test-transport`. |
 | `make bench` | Build and run the Google Benchmark suite for the FHE ops and the record→flush→replay path. |
-| `make coverage` | Produce a coverage report and enforce the line-coverage gate on `src/core/` and `src/api/`. |
+
+> **Deferred:** a `make coverage` target (and its `HAZE_COVERAGE` build option) is
+> planned but **not yet wired** in this tree — invoking it currently fails. The
+> coverage *driver* [`scripts/coverage.sh`](scripts/coverage.sh) is present; the
+> target, option, and CI gate will be added and documented as live only once
+> implemented and verified. See [`docs/decision-log.md`](docs/decision-log.md)
+> (D-06, D-10).
 
 Two of these targets guard project-wide invariants and must stay green:
 
@@ -184,10 +190,12 @@ not be accepted:
 - **Include tests** — Every PR carries Catch2 tests for the behavior it changes
   or adds, and updates the relevant README/`docs/` content.
 - **Keep CI green** — All existing CI workflows (`build-matrix`, `build-test`,
-  `clang-format`, `flake-check`, `openfhe-bump`, `PR - Claude Code Review`, and
-  `SCANOSS License Compliance`) plus the benchmark, coverage, and sanitizer jobs
-  must pass. Run `make test`, `scripts/clang-format.sh --check`, and
-  `scripts/clang-tidy.sh` locally first.
+  `clang-format`, `flake-check`, `openfhe-bump`, `PR - Claude Code Review`,
+  `SCANOSS License Compliance`) plus the `benchmark` job must pass. Dedicated
+  `coverage` and `sanitizers` workflows are **deferred** (not yet in the tree);
+  the `HAZE_SANITIZERS`/`HAZE_TSAN` build options exist and can be exercised
+  locally in the meantime. Run `make test`, `scripts/clang-format.sh --check`,
+  and `scripts/clang-tidy.sh` locally first.
 - **Describe the change** — Provide a short description of what was implemented
   and an explicit list of any human follow-up (for example, physical multi-chip
   hardware validation for peer access).

@@ -104,3 +104,22 @@ Never edit the files in this directory in isolation: because they are enforced
 mirrors, CI will flag any drift from `README.md`. To change an example, edit
 the corresponding `README.md` marker region first, then re-mirror the updated
 code into `examples/`. The top-level README stays the single source of truth.
+
+## Formatting and lint scope
+
+Both examples are kept `clang-format-19`-clean (with the repository
+[`.clang-format`](../.clang-format)), and every Haze/replay-bridge call is
+checked so a failed call fails the example loudly (the C example jumps to a
+single `cleanup:` path; the C++ example throws to `main`'s catch and lets RAII
+release the device groups deterministically). Running `clang-format` over either
+file is a no-op.
+
+Even so, `examples/` is intentionally **outside** the automated formatting gate
+`scripts/clang-format.sh`, which globs only `src include replay_bridge test`.
+These files are consumer-facing snippets whose authoritative source is the
+`README.md` marker region, not first-party library code: they are held in sync
+and validated by the docs-as-tests mirror check
+(`scripts/test_readme_examples.sh`) — which compiles, runs, and byte-diffs them
+against the README — rather than by the source lint gate. Keep both files
+`clang-format`-clean when editing the README regions; the rationale for this
+exclusion is recorded in [`docs/decision-log.md`](../docs/decision-log.md).

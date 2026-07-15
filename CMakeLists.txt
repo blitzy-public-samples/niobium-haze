@@ -356,6 +356,24 @@ if(TARGET niobium_fhetch)
 endif()
 
 # ---------------------------------------------------------------------------
+# Benchmarks (opt-in) — P1b
+# ---------------------------------------------------------------------------
+# Google Benchmark microbenchmark harness for the FHE compute ops and the
+# record->flush->replay path. Built as a SEPARATE executable that links the
+# shipped libhaze.so (the haze* C ABI) — it is never absorbed into the library,
+# so the shipped artifact, its ABI, and the symbol-leak audit are byte-for-byte
+# unaffected. Default OFF so the normal build and all CI merge gates are
+# untouched; `make bench` and the benchmark workflow turn it ON. Placed before
+# the HAZE_BUILD_TESTS opt-out below so benchmarks can be built without the
+# Catch2 test suite.
+option(HAZE_BUILD_BENCHMARKS
+  "Build the Google Benchmark harness (needs the benchmark CONFIG package)." OFF)
+if(HAZE_BUILD_BENCHMARKS)
+  find_package(benchmark CONFIG REQUIRED)
+  add_subdirectory(benchmark)
+endif()
+
+# ---------------------------------------------------------------------------
 # Tests (opt-out)
 # ---------------------------------------------------------------------------
 # Everything below builds the test suite + the isolation symbol-leak check and

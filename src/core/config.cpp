@@ -111,6 +111,11 @@ uint64_t Config::ring_dim() const noexcept {
     return ring_dim_;
 }
 
+bool Config::configured() const noexcept {
+    HazeLockGuard lock(mutex_);
+    return configured_;
+}
+
 uint64_t Config::modulus(int idx) const noexcept {
     HazeLockGuard lock(mutex_);
     if (idx < 0 || static_cast<size_t>(idx) >= moduli_.size())

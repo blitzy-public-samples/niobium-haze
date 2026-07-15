@@ -1,7 +1,10 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 #include "common/errors.hpp"
+#include "integration_helpers.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <haze/haze.h>       // IWYU pragma: keep
 #include <haze/haze_types.h> // IWYU pragma: keep
@@ -10,6 +13,7 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 TEST_CASE("error semantics: the last error clears after being read", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
@@ -164,4 +168,126 @@ TEST_CASE("error semantics: invalid arguments never throw across the C ABI", "[u
     const int exit_code = exited_normally ? WEXITSTATUS(status) : -1;
     REQUIRE(exited_normally);
     REQUIRE(exit_code == 0);
+}
+
+TEST_CASE("error semantics: graph capture survives a filesystem failure without throwing across "
+          "the C ABI",
+          "[integration]") {
+    // Reaching the graph's secure clone requires a real recorded op, so the
+    // backend is configured and the capture opened HERE in the parent (context
+    // build may run a thread pool). The child is forked with the capture
+    // already pending and does nothing but the faulting end-capture -- which is
+    // capture-only (trace serialization + filesystem clone, no replay/compute),
+    // so no thread-pool work runs after fork. The fault points the temp-dir
+    // resolver at "/dev/null" (never a directory), so the clone (mkdtemp under
+    // temp_directory_path()) fails. A correct noexcept boundary translates that
+    // to an error code; an exception escaping it would call std::terminate, so
+    // the child would not exit normally with status 0.
+    (void)haze::test::setup_integration_compute_config(4096);
+    constexpr std::size_t kBytes = 4096 * sizeof(uint64_t);
+    void *a = nullptr;
+    void *b = nullptr;
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    const std::vector<uint64_t> host(4096, 1ULL);
+    REQUIRE(hazeMemcpy(a, host.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, host.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(dst, a, b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+
+    const pid_t pid = fork();
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        setenv("TMPDIR", "/dev/null", 1); // NOLINT(misc-include-cleaner) POSIX, via <cstdlib>
+        hazeGraph_t graph = nullptr;
+        const hazeError_t ec = hazeStreamEndCapture(nullptr, &graph);
+        if (ec == HAZE_SUCCESS) {
+            (void)hazeGraphDestroy(graph); // fault did not trigger; stay deterministic
+            _exit(20);
+        }
+        _exit(0); // clone failed cleanly; no exception crossed the noexcept ABI
+    }
+
+    int status = 0;
+    REQUIRE(waitpid(pid, &status, 0) == pid);
+    // NOLINTNEXTLINE(misc-include-cleaner)
+    const bool exited_normally = WIFEXITED(status);
+    // NOLINTNEXTLINE(misc-include-cleaner)
+    const int exit_code = exited_normally ? WEXITSTATUS(status) : -1;
+    REQUIRE(exited_normally);
+    REQUIRE(exit_code == 0);
+
+    // The parent still holds the pending capture (fork copied it); close and
+    // discard it with a working temp dir, then reset for the next case.
+    hazeGraph_t parent_graph = nullptr;
+    REQUIRE(hazeStreamEndCapture(nullptr, &parent_graph) == HAZE_SUCCESS);
+    REQUIRE(parent_graph != nullptr);
+    REQUIRE(hazeGraphDestroy(parent_graph) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("error semantics: graph exec update survives a filesystem failure without throwing "
+          "across the C ABI",
+          "[integration]") {
+    // As above, but the fault is injected at hazeGraphExecUpdate time: a fully
+    // valid graph and exec are built in the parent, then the child forks and
+    // runs only the update under a broken temp dir, so the update's secure
+    // clone fails. G7 guarantees the exec is left valid (the old on-disk copy
+    // is never removed before the replacement is built) and G5 that no
+    // exception escapes, so the child must still exit normally with status 0.
+    (void)haze::test::setup_integration_compute_config(4096);
+    constexpr std::size_t kBytes = 4096 * sizeof(uint64_t);
+    void *a = nullptr;
+    void *b = nullptr;
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    const std::vector<uint64_t> host(4096, 1ULL);
+    REQUIRE(hazeMemcpy(a, host.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, host.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(dst, a, b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+    hazeGraph_t graph = nullptr;
+    REQUIRE(hazeStreamEndCapture(nullptr, &graph) == HAZE_SUCCESS);
+    REQUIRE(graph != nullptr);
+    hazeGraphExec_t exec = nullptr;
+    REQUIRE(hazeGraphInstantiate(&exec, graph) == HAZE_SUCCESS);
+    REQUIRE(exec != nullptr);
+
+    const pid_t pid = fork();
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        setenv("TMPDIR", "/dev/null", 1); // NOLINT(misc-include-cleaner) POSIX, via <cstdlib>
+        const hazeError_t ec = hazeGraphExecUpdate(exec, graph);
+        _exit(ec == HAZE_SUCCESS ? 20 : 0);
+    }
+
+    int status = 0;
+    REQUIRE(waitpid(pid, &status, 0) == pid);
+    // NOLINTNEXTLINE(misc-include-cleaner)
+    const bool exited_normally = WIFEXITED(status);
+    // NOLINTNEXTLINE(misc-include-cleaner)
+    const int exit_code = exited_normally ? WEXITSTATUS(status) : -1;
+    REQUIRE(exited_normally);
+    REQUIRE(exit_code == 0);
+
+    // The child's failed update never touched the parent's on-disk exec (G7),
+    // so with a working temp dir the same update succeeds and leaves a
+    // launchable exec -- proving the failure path was side-effect free.
+    REQUIRE(hazeGraphExecUpdate(exec, graph) == HAZE_SUCCESS);
+    REQUIRE(hazeGraphLaunch(exec, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeGraphExecDestroy(exec) == HAZE_SUCCESS);
+    REQUIRE(hazeGraphDestroy(graph) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }

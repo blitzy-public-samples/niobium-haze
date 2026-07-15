@@ -126,7 +126,7 @@ HAZE_RUNS_DIR = $(CURDIR)/$(BUILD_DIR)/runs
 # ==============================================================================
 
 .PHONY: help sync \
-        config build \
+        config build bench \
         config-openfhe build-openfhe \
         config-test-openfhe build-test-openfhe \
         test-unit test-sim test-e2e test-readme test-transport test-isolation test test-all \
@@ -143,6 +143,9 @@ Usage: make <target> [MODE=debug|release]
   Build:
     config              Configure haze (uses MODE; default: release)
     build               Build haze
+    bench               Build + run the Google Benchmark suite (MODE=release
+                        recommended); writes JSON and prints how to refresh
+                        benchmark/baseline.json
     config-openfhe      Configure OpenFHE
     build-openfhe       Build and install OpenFHE locally
     config-test-openfhe Configure the stock OpenFHE (for haze_e2e_tests)
@@ -266,6 +269,38 @@ config: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Configure haze (uses 
 
 build: config ## Build haze (uses MODE)
 	cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --config $(CMAKE_CONFIG)
+
+# ==============================================================================
+# Haze Benchmarks (opt-in; Google Benchmark) — P1b
+# ==============================================================================
+
+# Google Benchmark JSON output path. The regression baseline lives at
+# benchmark/baseline.json; refresh it from a run on a documented, stable
+# environment (MODE=release, quiet machine) rather than editing it by hand.
+HAZE_BENCH_OUT ?= $(CURDIR)/$(BUILD_DIR)/benchmark_results.json
+
+# Configure the SAME build dir as `config` but with the benchmark harness turned
+# on (a separate executable linking the shipped libhaze.so; libhaze itself is
+# unchanged), build only haze_benchmarks, then run it from the runs dir so the
+# in-process FHETCH simulator resolves program_dir under $(BUILD_DIR). MODE=release
+# is strongly recommended for meaningful numbers; the default MODE still works.
+bench: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Build + run the Google Benchmark suite and emit JSON
+	cmake -S "$(CURDIR)" -B "$(CURDIR)/$(BUILD_DIR)" \
+		-DCMAKE_BUILD_TYPE=$(CMAKE_CONFIG) \
+		-DOPENFHE_INSTALL_DIR="$(OPENFHE_INSTALL_DIR)" \
+		-DHAZE_BUILD_E2E_TESTS=$(HAZE_BUILD_E2E_TESTS) \
+		-DHAZE_TEST_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
+		-DHAZE_BUILD_BENCHMARKS=ON \
+		$(CMAKE_FHETCH_DIR_FLAG) \
+		$(CMAKE_JSON_INCLUDE_DIR_FLAG)
+	cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --config $(CMAKE_CONFIG) --target haze_benchmarks
+	@rm -rf "$(HAZE_RUNS_DIR)/haze"
+	@mkdir -p "$(HAZE_RUNS_DIR)"
+	@cd "$(HAZE_RUNS_DIR)" && \
+	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_benchmarks" \
+	    --benchmark_out="$(HAZE_BENCH_OUT)" --benchmark_out_format=json
+	@echo "benchmark JSON written to $(HAZE_BENCH_OUT)"
+	@echo "to refresh the regression baseline: cp '$(HAZE_BENCH_OUT)' benchmark/baseline.json"
 
 # ==============================================================================
 # Haze Tests

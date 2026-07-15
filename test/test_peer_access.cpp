@@ -30,11 +30,14 @@
 
 #include "integration_helpers.hpp"
 
+#include <atomic>
+#include <barrier>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <haze/haze.h>       // IWYU pragma: keep
 #include <haze/haze_types.h> // IWYU pragma: keep
+#include <thread>
 #include <vector>
 
 namespace {
@@ -186,6 +189,27 @@ TEST_CASE("peer access: peer access cannot be enabled on the single-device simul
     REQUIRE(can == 0);
 }
 
+TEST_CASE("peer access: device reset returns peer state to the single-device default", "[unit]") {
+    // Reset must leave the runtime in its documented default: one device, the
+    // active ordinal back at 0, and no peer authorized. On the single-device
+    // simulator the enabled-peer matrix is always empty, so this pins the reset
+    // CONTRACT (device_reset clears g_active_device and g_peer_enabled) at the
+    // representable level; the enabled -> reset -> revoked transition is
+    // exercised by the [.][hardware] case below.
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    int device = -1;
+    REQUIRE(hazeGetDevice(&device) == HAZE_SUCCESS);
+    REQUIRE(device == 0);
+    int count = 0;
+    REQUIRE(hazeGetDeviceCount(&count) == HAZE_SUCCESS);
+    REQUIRE(count == 1);
+    int can = -1;
+    REQUIRE(hazeDeviceCanAccessPeer(&can, 0, 0) == HAZE_SUCCESS);
+    REQUIRE(can == 0);
+    REQUIRE(hazeDeviceEnablePeerAccess(0, 0U) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
 // ---------------------------------------------------------------------------
 // hazeMemcpyPeerAsync (argument validation)
 // ---------------------------------------------------------------------------
@@ -245,6 +269,54 @@ TEST_CASE("peer access: memcpyPeerAsync rejects an unknown device address", "[un
     // NOLINTEND(performance-no-int-to-ptr)
     REQUIRE(hazeMemcpyPeerAsync(dst, 0, unknown_src, 0, kBytes, nullptr) ==
             HAZE_ERROR_UNKNOWN_ADDRESS);
+    hazeGetLastError();
+}
+
+TEST_CASE("peer access: memcpyPeerAsync rejects an unknown destination address", "[unit]") {
+    configure_single_device();
+    void *src = nullptr;
+    REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
+    DeviceGuard src_guard(src);
+
+    // Mirror of the unknown-source case for the DESTINATION operand. The copy
+    // path validates destination liveness (allocator generation != 0) before
+    // recording, so a synthetic HBM address that was never allocated is
+    // classified as unmapped. The baseline only exercised an unknown source;
+    // asserting the unknown-destination path pins the P3 "validate the
+    // destination" contract so a copy can never bind onto a freed or
+    // never-allocated address.
+    // NOLINTBEGIN(performance-no-int-to-ptr)
+    void *unknown_dst = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0xB000000ULL);
+    // NOLINTEND(performance-no-int-to-ptr)
+    REQUIRE(hazeMemcpyPeerAsync(unknown_dst, 0, src, 0, kBytes, nullptr) ==
+            HAZE_ERROR_UNKNOWN_ADDRESS);
+    hazeGetLastError();
+}
+
+TEST_CASE("peer access: memcpyPeerAsync rejects a byte count that is not one whole polynomial",
+          "[unit]") {
+    configure_single_device();
+    void *src = nullptr;
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
+    DeviceGuard src_guard(src);
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    DeviceGuard dst_guard(dst);
+
+    // A device-to-device copy is a whole-polynomial value copy: the only
+    // supported count is exactly one polynomial (polynomial_size() bytes, which
+    // is kBytes under this single-limb configuration). The count is validated
+    // before destination/source liveness, so a mismatch is rejected as
+    // HAZE_ERROR_INVALID_VALUE regardless of the operands. The baseline never
+    // tested count; an implementation that ignored it would silently move the
+    // wrong number of bytes.
+    REQUIRE(hazeMemcpyPeerAsync(dst, 0, src, 0, kBytes - sizeof(uint64_t), nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeMemcpyPeerAsync(dst, 0, src, 0, kBytes + sizeof(uint64_t), nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeMemcpyPeerAsync(dst, 0, src, 0, 0, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
@@ -337,6 +409,55 @@ TEST_CASE("peer access: memcpyPeerAsync of a never-written source returns SOURCE
 }
 
 // ---------------------------------------------------------------------------
+// Concurrency (opt in with `./haze_tests "[concurrency]"`, ideally under TSan).
+// Exercises the standalone device mutex that guards the active-device ordinal
+// and the enabled-peer matrix (the P2 data-race fix): a missing lock would
+// surface here as a TSan data race or an inconsistent result.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("peer access: concurrent device and peer calls are race-free", "[.][concurrency]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+
+    constexpr int kThreads = 8;
+    constexpr int kIterations = 256;
+
+    std::barrier start(kThreads);
+    std::atomic<int> failures{0};
+    std::vector<std::thread> workers;
+    workers.reserve(kThreads);
+    for (int t = 0; t < kThreads; ++t) {
+        // Half the threads write then read the active-device ordinal; the other
+        // half hammer the enabled-peer matrix through enable/query. Both fields
+        // live behind the same device mutex, so the two halves contend on it.
+        const bool mutate_active = (t % 2) == 0;
+        workers.emplace_back([&, mutate_active] {
+            start.arrive_and_wait();
+            for (int i = 0; i < kIterations; ++i) {
+                if (mutate_active) {
+                    if (hazeSetDevice(0) != HAZE_SUCCESS)
+                        failures.fetch_add(1);
+                    int device = -1;
+                    if (hazeGetDevice(&device) != HAZE_SUCCESS || device != 0)
+                        failures.fetch_add(1);
+                } else {
+                    // The single-device simulator has no distinct peer, so every
+                    // concurrent enable attempt must be rejected and the device
+                    // must never report itself as its own peer.
+                    if (hazeDeviceEnablePeerAccess(0, 0U) != HAZE_ERROR_INVALID_VALUE)
+                        failures.fetch_add(1);
+                    int can = -1;
+                    if (hazeDeviceCanAccessPeer(&can, 0, 0) != HAZE_SUCCESS || can != 0)
+                        failures.fetch_add(1);
+                }
+            }
+        });
+    }
+    for (std::thread &worker : workers)
+        worker.join();
+    REQUIRE(failures.load() == 0);
+}
+
+// ---------------------------------------------------------------------------
 // Hardware-gated multi-device contract (hidden by default; opt in with
 // `./haze_tests "[hardware]"`). Physical multi-chip validation is human
 // follow-up and is not gated by CI.
@@ -390,4 +511,77 @@ TEST_CASE("peer access: multi-device peer enable, copy, and readback", "[.][hard
     REQUIRE(hazeMemcpy(out.data(), dst_peer, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     for (std::size_t i = 0; i < kRingDim; ++i)
         REQUIRE(out[i] == (residue[i] + residue[i]) % q);
+}
+
+TEST_CASE("peer access: a distinct-device copy without enabling peer access is rejected",
+          "[.][hardware]") {
+    // Without a prior hazeDeviceEnablePeerAccess, a copy between two DISTINCT
+    // devices is unauthorized and must be rejected by the authorization gate
+    // (device_peer_copy_authorized) before any bytes move. Self-skips on the
+    // single-device simulator, where no distinct peer exists.
+    const uint64_t q = haze::test::setup_integration_compute_config();
+
+    int count = 0;
+    REQUIRE(hazeGetDeviceCount(&count) == HAZE_SUCCESS);
+    if (count < 2) {
+        SUCCEED("requires >=2 devices; physical multi-chip validation is human follow-up");
+        return;
+    }
+
+    // Source on device 1, destination on device 0. Peer access 0 -> 1 is never
+    // enabled, so the copy must be rejected as unauthorized.
+    REQUIRE(hazeSetDevice(1) == HAZE_SUCCESS);
+    void *src = nullptr;
+    REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
+    DeviceGuard src_guard(src);
+    const auto residue = haze::test::make_residue(q, /*seed=*/11, kRingDim);
+    REQUIRE(hazeMemcpy(src, residue.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    REQUIRE(hazeSetDevice(0) == HAZE_SUCCESS);
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    DeviceGuard dst_guard(dst);
+
+    REQUIRE(hazeMemcpyPeerAsync(dst, 0, src, 1, kBytes, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("peer access: device reset revokes previously enabled peer access", "[.][hardware]") {
+    // enable(0 -> 1) then reset must clear the enable state (device_reset zeroes
+    // g_peer_enabled), so a subsequent distinct-device copy is rejected until
+    // peer access is enabled again. Self-skips on the single-device simulator.
+    const uint64_t q = haze::test::setup_integration_compute_config();
+
+    int count = 0;
+    REQUIRE(hazeGetDeviceCount(&count) == HAZE_SUCCESS);
+    if (count < 2) {
+        SUCCEED("requires >=2 devices; physical multi-chip validation is human follow-up");
+        return;
+    }
+
+    REQUIRE(hazeDeviceEnablePeerAccess(1, 0U) == HAZE_SUCCESS);
+
+    // Reset clears both the active-device ordinal and the enabled-peer matrix.
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+
+    // Reconfigure so the copy path is reachable, but do NOT re-enable peer
+    // access. The authorization gate fires on the device ordinals before any
+    // pointer lookup, so the cleared enable state makes the copy fail.
+    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+
+    REQUIRE(hazeSetDevice(1) == HAZE_SUCCESS);
+    void *src = nullptr;
+    REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
+    DeviceGuard src_guard(src);
+    const auto residue = haze::test::make_residue(q, /*seed=*/13, kRingDim);
+    REQUIRE(hazeMemcpy(src, residue.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    REQUIRE(hazeSetDevice(0) == HAZE_SUCCESS);
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    DeviceGuard dst_guard(dst);
+
+    REQUIRE(hazeMemcpyPeerAsync(dst, 0, src, 1, kBytes, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
 }

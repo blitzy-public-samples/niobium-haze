@@ -84,4 +84,11 @@ std::expected<void, HazeInternalError> graph_exec_destroy(hazeGraphExec_t exec) 
 // hazeGraphDestroy: free a graph (and its on-disk copy).
 std::expected<void, HazeInternalError> graph_destroy(hazeGraph_t graph) noexcept;
 
+// Drop every live graph and exec, removing their on-disk trace copies. Invoked
+// from the device-reset path (hazeDeviceReset -> reset_all) so a reset returns
+// the runtime to a clean slate rather than leaking graph state and temp dirs
+// across resets. The monotonic handle-id counter is intentionally NOT rewound,
+// so a handle captured before a reset can never alias a handle minted after it.
+void graph_reset() noexcept;
+
 } // namespace haze

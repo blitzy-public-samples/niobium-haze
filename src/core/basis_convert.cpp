@@ -16,6 +16,7 @@
 #include "common/errors.hpp"
 #include "core/config.hpp"
 #include "core/epoch.hpp"
+#include "core/metrics.hpp"
 #include "core/mrp_polymap.hpp"
 
 #include <cstddef>
@@ -130,7 +131,13 @@ std::expected<void, HazeInternalError> basis_convert(void *const *dst, const voi
     // byte-for-byte; with reduced_noise on it tracks the centered variant automatically.
     fhetch::MRP result =
         fhetch::fast_base_convert(*src_mrp, target_base, fbc_variant(), fbc_center_shape());
-    return store_mrp_locked(dst, result, p.dst_base, p.dst_base_len);
+    auto stored = store_mrp_locked(dst, result, p.dst_base, p.dst_base_len);
+    if (!stored)
+        return stored;
+    // One high-level basis-convert op emitted, counted once regardless of
+    // residue fan-out; reached only on the success path (M1).
+    metrics().add_op();
+    return {};
 }
 
 std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *const *src,
@@ -153,7 +160,13 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
     // order. Use it directly so HAZE-side and backend-side never disagree
     // on the dst layout.
     const auto &dst_base = result.base();
-    return store_mrp_locked(dst, result, dst_base.data(), dst_base.size());
+    auto stored = store_mrp_locked(dst, result, dst_base.data(), dst_base.size());
+    if (!stored)
+        return stored;
+    // One high-level mod-down op emitted, counted once regardless of residue
+    // fan-out; reached only on the success path (M1).
+    metrics().add_op();
+    return {};
 }
 
 std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *const *src,
@@ -198,6 +211,9 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
         if (!stored)
             return stored;
     }
+    // One high-level mod-up op emitted per API call, counted once regardless of
+    // digit/residue fan-out; reached only after every digit stored (M1).
+    metrics().add_op();
     return {};
 }
 

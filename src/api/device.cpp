@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "core/metrics.hpp"
 
+#include <cstring>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 
@@ -64,6 +65,14 @@ extern "C" hazeError_t hazeDeviceCanAccessPeer(int *can_access, int device, int 
 extern "C" hazeError_t hazeGetPerformanceCounters(void *counters) noexcept {
     if (counters == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    *static_cast<hazePerformanceCounters *>(counters) = haze::metrics().snapshot();
+    // Take a coherent snapshot into a properly-aligned local, then copy the raw
+    // bytes to the caller's buffer. `counters` is a plain void* whose alignment
+    // is unknown, so a typed store through it (*static_cast<T*>(counters) = ...)
+    // would be undefined behaviour on a misaligned buffer; std::memcpy is
+    // well-defined for any alignment (M2). The ABI contract (documented in
+    // haze.h) is that `counters` points to at least
+    // sizeof(hazePerformanceCounters) writable bytes.
+    const hazePerformanceCounters snap = haze::metrics().snapshot();
+    std::memcpy(counters, &snap, sizeof(snap));
     return HAZE_SUCCESS;
 }
