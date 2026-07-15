@@ -24,6 +24,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +33,7 @@
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <haze/replay_bridge.h>
 #include <ios>
 #include <niobium/compiler.h>
@@ -39,26 +42,151 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-// Disk-driven local FHETCH replay entry point. Defined in libnbfhetch
-// (src/local_replay.cpp) and absorbed into libhaze; it drives the simulator
-// purely from an on-disk project directory with no Compiler-singleton state,
-// which is exactly what graph replay-many requires: each launch re-dispatches
-// the frozen captured project deterministically. Self-declared here (rather
-// than pulling a private libnbfhetch header) to keep the include surface
-// minimal; the mangled niobium:: symbol stays internal to libhaze under the
-// version script, so the symbol-leak audit is unaffected.
-namespace niobium {
-bool run_local_replay_from_project(const std::filesystem::path &dir);
-} // namespace niobium
+// libnbfhetch internal helpers (declared in the library's private
+// compiler_internal.h, which is not on HAZE's include path). They are exported
+// from libnbfhetch.a with external linkage, so forward-declaring them here lets
+// graph replay repopulate the compiler's captured inputs and map a recorded
+// Polynomial back to its synthetic FHETCH address without reaching into the
+// opaque PolynomialImpl. Signatures MUST match the library verbatim so the
+// mangled names resolve at link time.
+namespace niobium::detail {
+uintptr_t polynomial_address(const niobium::fhetch::Polynomial &p);
+void for_each_captured_input(const std::function<void(const niobium::CapturedInputRecord &)> &cb);
+} // namespace niobium::detail
 
 namespace haze {
 
 namespace fhetch = niobium::fhetch;
+
+namespace {
+
+// FNV-1a 64-bit accumulation over a byte range. Used to build a structural
+// signature of a recorded op-sequence (see trace_signature_for_dir): folding
+// only the semantically-significant lines — with operand register numbers
+// canonicalized (see fold_canonical_line) — makes the signature invariant to
+// the volatile "# Generated: <timestamp>" header and to the absolute SSA
+// numbering of a pure input rebind, while still distinguishing a different
+// operation (sr_addp vs sr_mulp) or a different op count.
+constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ULL;
+constexpr uint64_t kFnvPrime = 1099511628211ULL;
+
+uint64_t fnv1a_accumulate(uint64_t hash, std::string_view data) noexcept {
+    for (const char c : data) {
+        hash ^= static_cast<uint64_t>(static_cast<unsigned char>(c));
+        hash *= kFnvPrime;
+    }
+    return hash;
+}
+
+// Trim ASCII whitespace from both ends of `line` in place.
+std::string_view trim_view(std::string_view line) noexcept {
+    size_t begin = 0;
+    size_t end = line.size();
+    while (begin < end && (std::isspace(static_cast<unsigned char>(line[begin])) != 0))
+        ++begin;
+    while (end > begin && (std::isspace(static_cast<unsigned char>(line[end - 1])) != 0))
+        --end;
+    return line.substr(begin, end - begin);
+}
+
+// Fold a single trimmed trace line into `hash`, rewriting every operand
+// register token "%<digits>" to a canonical "%r<first-appearance-index>" using
+// `reg_map` (which carries the numbering across the whole trace file). The
+// FHETCH trace writer assigns operand ids from allocation history, so a pure
+// input rebind (a+b vs a+c) emits the same opcode/dataflow structure but can
+// differ in the absolute ids (e.g. "sr_addp %3, %0, %1" vs "sr_addp %2, %0,
+// %1"). Canonicalizing by first-appearance order collapses that volatile
+// numbering while preserving which operands reuse earlier values, so a rebind
+// hashes equal but a different opcode (sr_mulp) or dataflow shape still differs.
+// Tokens that are not "%<digits>" (opcodes, "m=1", the "m[0] 0x..." modulus
+// table) pass through byte-for-byte, keeping the modulus values topology-
+// significant.
+uint64_t fold_canonical_line(uint64_t hash, std::string_view line,
+                             std::unordered_map<uint64_t, uint64_t> &reg_map) noexcept {
+    const size_t n = line.size();
+    size_t i = 0;
+    while (i < n) {
+        if (line[i] == '%' && i + 1 < n &&
+            std::isdigit(static_cast<unsigned char>(line[i + 1])) != 0) {
+            size_t j = i + 1;
+            uint64_t reg = 0;
+            while (j < n && std::isdigit(static_cast<unsigned char>(line[j])) != 0) {
+                reg = (reg * 10U) + static_cast<uint64_t>(line[j] - '0');
+                ++j;
+            }
+            const auto [it, inserted] = reg_map.try_emplace(reg, reg_map.size());
+            hash = fnv1a_accumulate(hash, "%r");
+            char buf[20];
+            const auto res = std::to_chars(buf, buf + sizeof(buf), it->second);
+            if (res.ec == std::errc())
+                hash = fnv1a_accumulate(hash,
+                                        std::string_view(buf, static_cast<size_t>(res.ptr - buf)));
+            i = j;
+        } else {
+            hash = fnv1a_accumulate(hash, std::string_view(&line[i], 1));
+            ++i;
+        }
+    }
+    return hash;
+}
+
+// Compute a structural signature of the recorded op-sequence by hashing the
+// non-comment, non-blank lines of every .fhetch trace under `dir` (the modulus
+// table + the sr_* instruction stream + halt), with operand register numbers
+// canonicalized per file (see fold_canonical_line). Comment lines ('#') —
+// including the volatile "# Generated" timestamp and the "# output" bindings —
+// are excluded, so two captures that differ only in their input operands (a
+// pure rebind such as a+b vs a+c) hash equal, while a different operation or op
+// count hashes differently. Files are visited in sorted path order for
+// determinism, and the register numbering resets per file since each .fhetch is
+// an independent program. Returns 0 on any I/O failure or when no trace is
+// found (an all-comment/empty digest also folds to the offset basis, distinct
+// from 0).
+uint64_t trace_signature_for_dir(const std::filesystem::path &dir) noexcept {
+    std::vector<std::filesystem::path> traces;
+    try {
+        if (!std::filesystem::exists(dir))
+            return 0;
+        for (const auto &entry : std::filesystem::recursive_directory_iterator(dir)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".fhetch")
+                traces.push_back(entry.path());
+        }
+    } catch (...) {
+        return 0;
+    }
+    if (traces.empty())
+        return 0;
+    std::ranges::sort(traces);
+
+    uint64_t hash = kFnvOffsetBasis;
+    try {
+        for (const auto &trace : traces) {
+            std::ifstream in(trace);
+            if (!in)
+                return 0;
+            std::unordered_map<uint64_t, uint64_t> reg_map;
+            std::string line;
+            while (std::getline(in, line)) {
+                const std::string_view trimmed = trim_view(line);
+                if (trimmed.empty() || trimmed.front() == '#')
+                    continue;
+                hash = fold_canonical_line(hash, trimmed, reg_map);
+                hash = fnv1a_accumulate(hash, "\n");
+            }
+        }
+    } catch (...) {
+        return 0;
+    }
+    return hash;
+}
+
+} // namespace
 
 EpochState &EpochState::instance() noexcept {
     static EpochState inst;
@@ -511,24 +639,36 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked(bool ru
 
     // Step 3: per-output shadow population. Any failure aborts the
     // epoch so a stale shadow can't surface as a silent wrong-value D2H.
+    // fhetch::result() deserializes the replay probe and can throw a cereal
+    // exception on a corrupt/truncated file; the try/catch keeps that C++
+    // exception from crossing the noexcept C ABI boundary as a raw throw,
+    // surfacing a clean HAZE_ERROR_INTERNAL instead.
     for (auto &[addr, name] : pending_outputs_) {
-        fhetch::Polynomial result_poly;
-        if (!fhetch::result(name, result_poly)) {
-            std::ostringstream body;
-            body << "result('" << name << "') unavailable for addr 0x" << std::hex
-                 << to_uintptr(addr) << std::dec;
-            clear_state_locked();
-            record_internal_error(HazeInternalError::BackendOutputMissing, body.str().c_str());
-            return std::unexpected(HazeInternalError::BackendOutputMissing);
-        }
         std::vector<uint64_t> values;
-        if (!extract_polynomial_values(result_poly, name, values)) {
-            std::ostringstream body;
-            body << "failed to extract values for output '" << name << "' at addr 0x" << std::hex
-                 << to_uintptr(addr) << std::dec;
+        try {
+            fhetch::Polynomial result_poly;
+            if (!fhetch::result(name, result_poly)) {
+                std::ostringstream body;
+                body << "result('" << name << "') unavailable for addr 0x" << std::hex
+                     << to_uintptr(addr) << std::dec;
+                clear_state_locked();
+                record_internal_error(HazeInternalError::BackendOutputMissing, body.str().c_str());
+                return std::unexpected(HazeInternalError::BackendOutputMissing);
+            }
+            if (!extract_polynomial_values(result_poly, name, values)) {
+                std::ostringstream body;
+                body << "failed to extract values for output '" << name << "' at addr 0x"
+                     << std::hex << to_uintptr(addr) << std::dec;
+                clear_state_locked();
+                record_internal_error(HazeInternalError::BackendOutputDecodeFailed,
+                                      body.str().c_str());
+                return std::unexpected(HazeInternalError::BackendOutputDecodeFailed);
+            }
+        } catch (...) {
             clear_state_locked();
-            record_internal_error(HazeInternalError::BackendOutputDecodeFailed, body.str().c_str());
-            return std::unexpected(HazeInternalError::BackendOutputDecodeFailed);
+            record_internal_error(HazeInternalError::BackendReplayFailed,
+                                  "do_materialize_locked: reading replay output threw");
+            return std::unexpected(HazeInternalError::BackendReplayFailed);
         }
         if (auto r = allocator().update_shadow(addr, std::move(values)); !r) {
             clear_state_locked();
@@ -749,11 +889,90 @@ EpochState::end_capture_snapshot_locked() noexcept {
         remove_clone();
         capturing_ = false;
         clear_state_locked();
-        record_internal_error(HazeInternalError::SourceUnavailable,
-                              "end_capture_snapshot_locked: could not read instruction trace "
-                              "for topology fingerprint");
-        return std::unexpected(HazeInternalError::SourceUnavailable);
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "end_capture_snapshot_locked: project directory copy failed");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
+
+    // Snapshot the input bindings instead of the computed outputs. stop_epoch()
+    // above called Compiler::stop(), which ran sync_fhetch_state_to_compiler()
+    // to populate the compiler's captured_inputs from this epoch's tag_input
+    // records — so for_each_captured_input now enumerates every recorded input
+    // (name, kind, per-residue addr_id / modulus / values). We pair each
+    // recorded residue with the live HAZE DevAddr that produced it (via the
+    // Polynomial's synthetic FHETCH address) so replay can re-read that address's
+    // CURRENT shadow on every launch: this is the record-once / replay-many-
+    // with-current-inputs contract that a one-time output cache cannot express.
+    // Residues with no HAZE shadow behind them (e.g. auto-captured precompute)
+    // stay pinned to their recorded values as an auxiliary fallback.
+    std::vector<SnapshotInput> inputs;
+    try {
+        // addr_id -> live-in HAZE DevAddr, over the inputs still bound this
+        // epoch. polynomial_address(poly) returns the same synthetic address
+        // sync recorded into captured_inputs, so the join is exact.
+        std::unordered_map<uint64_t, DevAddr> addr_id_to_dev;
+        addr_id_to_dev.reserve(input_addrs_.size());
+        for (const DevAddr in_addr : input_addrs_) {
+            auto it = poly_map_.find(in_addr);
+            if (it == poly_map_.end())
+                continue;
+            const auto id = static_cast<uint64_t>(niobium::detail::polynomial_address(it->second));
+            addr_id_to_dev.emplace(id, in_addr);
+        }
+
+        niobium::detail::for_each_captured_input([&](const niobium::CapturedInputRecord &rec) {
+            SnapshotInput snap_in;
+            snap_in.name = rec.name;
+            snap_in.kind = static_cast<uint8_t>(rec.shape.kind);
+            // Flatten per_element_moduli back to a per-residue list aligned
+            // 1:1 with addr_ids (slice_per_element_moduli concatenates to
+            // this order for every kind), and reconstruct the element
+            // boundaries store_input_element expects.
+            std::vector<uint64_t> flat_moduli;
+            for (const auto &element : rec.shape.per_element_moduli)
+                flat_moduli.insert(flat_moduli.end(), element.begin(), element.end());
+            const bool array_kind = rec.shape.kind == niobium::CapturedKind::SRPArray ||
+                                    rec.shape.kind == niobium::CapturedKind::MRPArray;
+
+            snap_in.residues.reserve(rec.addr_ids.size());
+            size_t running = 0;
+            for (const auto &element : rec.shape.per_element_moduli) {
+                for (size_t j = 0; j < element.size(); ++j) {
+                    const size_t idx = running + j;
+                    if (idx >= rec.addr_ids.size())
+                        break;
+                    SnapshotInputResidue residue;
+                    residue.addr_id = rec.addr_ids[idx];
+                    residue.modulus = idx < flat_moduli.size() ? flat_moduli[idx] : 0;
+                    residue.starts_new_element = array_kind && j == 0;
+                    if (auto dev = addr_id_to_dev.find(residue.addr_id);
+                        dev != addr_id_to_dev.end()) {
+                        residue.refreshable = true;
+                        residue.refresh_addr = dev->second;
+                    }
+                    // Always retain the recorded values: they seed the first
+                    // launch identically to capture and back the fallback for
+                    // a residue whose shadow is gone (e.g. a freed input).
+                    if (idx < rec.per_residue_values.size())
+                        residue.recorded_values = rec.per_residue_values[idx];
+                    snap_in.residues.push_back(std::move(residue));
+                }
+                running += element.size();
+            }
+            inputs.push_back(std::move(snap_in));
+        });
+    } catch (...) {
+        capturing_ = false;
+        clear_state_locked();
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "end_capture_snapshot_locked: input-binding snapshot failed");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+
+    // Structural signature of the recorded op-sequence, used by
+    // graph_exec_update to distinguish a same-topology parameter rebind from a
+    // genuine operation-topology change (see trace_signature_for_dir).
+    const uint64_t trace_signature = trace_signature_for_dir(graph_dir);
 
     // Assemble the snapshot. Every member assignment below is a noexcept move
     // (std::filesystem::path, std::string and std::vector all have noexcept
@@ -763,9 +982,10 @@ EpochState::end_capture_snapshot_locked() noexcept {
     EpochTraceSnapshot snapshot;
     snapshot.project_dir = std::move(graph_dir);
     snapshot.outputs = std::move(outputs);
-    snapshot.target = config().target();
-    snapshot.topology = std::move(topology);
     snapshot.output_generations = std::move(output_generations);
+    snapshot.target = config().target();
+    snapshot.inputs = std::move(inputs);
+    snapshot.trace_signature = trace_signature;
 
     clear_state_locked();
     capturing_ = false;
@@ -774,10 +994,17 @@ EpochState::end_capture_snapshot_locked() noexcept {
 
 std::expected<void, HazeInternalError>
 EpochState::replay_snapshot_locked(const EpochTraceSnapshot &snapshot) noexcept {
+    const uint64_t ring_dim = config().ring_dim();
+    if (ring_dim == 0) {
+        record_internal_error(HazeInternalError::SourceUnavailable,
+                              "replay_snapshot_locked: ring dimension not configured");
+        return std::unexpected(HazeInternalError::SourceUnavailable);
+    }
+
     // G2 state-machine guard: a launch is illegal while a capture is open or
     // while any ad-hoc recording (pending SRP/MRP work) is in flight — the
-    // launch must not interleave its disk-driven replay with a half-recorded
-    // epoch. Reject WITHOUT disturbing that state.
+    // launch must not interleave its re-dispatch with a half-recorded epoch.
+    // Reject WITHOUT disturbing that state.
     if (capturing_ || !pending_outputs_.empty() || !pending_mrp_groups_.empty()) {
         record_internal_error(HazeInternalError::InvalidArgument,
                               "replay_snapshot_locked: launch attempted during an active "
@@ -790,8 +1017,7 @@ EpochState::replay_snapshot_locked(const EpochTraceSnapshot &snapshot) noexcept 
                               "replay_snapshot_locked: outputs / generations size mismatch");
         return std::unexpected(HazeInternalError::BackendShapeMismatch);
     }
-
-    // G6 ABA pre-check (fail fast before the expensive replay): every output
+    // G6 ABA pre-check (fail fast before the expensive re-dispatch): every output
     // DevAddr must still hold the generation it had at capture. A freed +
     // recycled address now carries a newer generation and is rejected, so a
     // stale graph can never clobber an unrelated live buffer.
@@ -807,88 +1033,137 @@ EpochState::replay_snapshot_locked(const EpochTraceSnapshot &snapshot) noexcept 
         }
     }
 
-    // G1 real replay-many: re-dispatch the frozen captured project from disk.
-    // run_local_replay_from_project drives the simulator purely from the
-    // on-disk directory with no Compiler-singleton state, so it is repeatable
-    // and independent of whatever epoch ran last. G5: it (and the JSON readback
-    // below) can throw through OpenFHE / nlohmann / filesystem, so the whole
-    // dispatch+readback is wrapped; nothing escapes this noexcept boundary.
-    try {
-        // A launch materializes real values, exactly like a flush; time it and
-        // count it so the performance counters see graph launches as the
-        // genuine dispatches they are (mirrors do_materialize_locked).
-        const auto flush_start = std::chrono::steady_clock::now();
-        const bool replay_ok = niobium::run_local_replay_from_project(snapshot.project_dir);
-        const auto flush_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                  std::chrono::steady_clock::now() - flush_start)
-                                  .count();
-        metrics().record_flush(static_cast<uint64_t>(flush_ns));
-        if (!replay_ok) {
-            record_internal_error(HazeInternalError::BackendReplayFailed,
-                                  "replay_snapshot_locked: run_local_replay_from_project failed");
-            return std::unexpected(HazeInternalError::BackendReplayFailed);
-        }
-
-        // Read the freshly computed outputs the replay wrote to disk. Schema:
-        // { "outputs": [ { "name":..., "elements":[ { "addr_id":u64,
-        //   "modulus":u64, "status":"computed"|"missing", "values":[u64...] } ] } ] }
-        //
-        // Match by output NAME, not by addr_id: addr_id here is a FHETCH
-        // logical index assigned by the simulator (e.g. 2), NOT the HAZE
-        // DevAddr, so the two address spaces do not coincide. This mirrors the
-        // in-process read-back path (do_materialize_locked keys results by
-        // name via fhetch::result); we take the first computed element of each
-        // named output, matching extract_polynomial_values' first-tower
-        // semantics, and bind it to the DevAddr the snapshot recorded.
-        std::ifstream in(snapshot.project_dir / "fhetch_replay_outputs.json");
-        if (!in.is_open()) {
-            record_internal_error(HazeInternalError::BackendOutputMissing,
-                                  "replay_snapshot_locked: fhetch_replay_outputs.json missing");
-            return std::unexpected(HazeInternalError::BackendOutputMissing);
-        }
-        auto root = nlohmann::json::parse(in, nullptr, /*allow_exceptions=*/false);
-        if (root.is_discarded() || !root.contains("outputs")) {
-            record_internal_error(HazeInternalError::BackendOutputDecodeFailed,
-                                  "replay_snapshot_locked: malformed fhetch_replay_outputs.json");
-            return std::unexpected(HazeInternalError::BackendOutputDecodeFailed);
-        }
-        std::unordered_map<std::string, std::vector<uint64_t>> by_name;
-        for (const auto &out_entry : root["outputs"]) {
-            const auto name = out_entry.value("name", std::string{});
-            if (name.empty() || by_name.contains(name))
-                continue;
-            for (const auto &elem : out_entry.value("elements", nlohmann::json::array())) {
-                if (elem.value("status", std::string{}) != "computed")
-                    continue;
-                by_name.emplace(name, elem.value("values", std::vector<uint64_t>{}));
-                break; // first computed element (first tower), matching in-process readback
+    // Leave the libnbfhetch compiler's captured_inputs/captured_outputs empty on
+    // every exit path. replay() below rehydrates captured_outputs from the
+    // snapshot's on-disk <program>.outputs.json (its "cache-hit" path), so a
+    // launch would otherwise leave that output binding resident in the shared
+    // Compiler singleton. Compiler::start() does NOT clear captured state, so a
+    // subsequent hazeStreamBeginCapture would inherit this launch's outputs and
+    // write_replay_json() would fold them into the next graph's outputs.json —
+    // corrupting that graph's replay (its reconstruct_probes consumes a stale
+    // foreign output address and refuses to rewrite the probe). Clearing here
+    // mirrors clear_state_locked()'s "don't leak captures into the next epoch"
+    // contract for the record-once/replay-many launch path. Guarded because this
+    // function is noexcept.
+    struct CapturedStateGuard {
+        ~CapturedStateGuard() {
+            try {
+                niobium::fhetch::reset_for_epoch();
+                niobium::compiler().clear_captured();
+            } catch (...) { // NOLINT(bugprone-empty-catch)
+                // Best-effort cleanup: the clears manipulate in-memory
+                // containers only and are not expected to throw. Swallowing
+                // preserves the noexcept boundary; a subsequent launch re-clears
+                // at entry regardless.
             }
         }
+    } captured_state_guard;
 
-        // Repopulate each output shadow from the recomputed values. update_shadow
-        // runs under the epoch lock, preserving the epoch -> allocator order.
-        for (const auto &[addr, name] : snapshot.outputs) {
-            auto it = by_name.find(name);
-            if (it == by_name.end()) {
+    // Re-dispatch the recorded op-sequence against CURRENT inputs. Step 1:
+    // start from clean compiler + fhetch capture state so replay()'s internal
+    // sync_fhetch_state_to_compiler() is a no-op (the stale tag_input records
+    // left over from capture would otherwise double-populate captured_inputs)
+    // and re-seed the compiler's captured_inputs ourselves. reset_for_epoch()
+    // clears the fhetch input/probe registries; clear_captured() clears the
+    // compiler's captured_inputs/outputs.
+    niobium::fhetch::reset_for_epoch();
+    niobium::compiler().clear_captured();
+
+    // Step 2: repopulate captured_inputs residue-by-residue. Refreshable
+    // residues re-read their live device shadow so an operand overwritten at a
+    // stable DevAddr between launches takes effect; the read is non-evicting so
+    // the input stays reusable for the next launch. A residue whose shadow is
+    // gone (freed input) falls back to its recorded values.
+    for (const SnapshotInput &input : snapshot.inputs) {
+        const auto kind = static_cast<niobium::CapturedKind>(input.kind);
+        for (const SnapshotInputResidue &residue : input.residues) {
+            std::vector<uint64_t> values;
+            bool have_values = false;
+            if (residue.refreshable) {
+                if (auto shadow =
+                        allocator().read_polynomial_components(residue.refresh_addr, ring_dim)) {
+                    values = std::move(*shadow);
+                    have_values = true;
+                }
+            }
+            if (!have_values)
+                values = residue.recorded_values;
+            try {
+                niobium::compiler().store_input_element(input.name, kind,
+                                                        residue.starts_new_element, residue.addr_id,
+                                                        residue.modulus, values);
+            } catch (...) {
+                record_internal_error(HazeInternalError::BackendReplayFailed,
+                                      "replay_snapshot_locked: store_input_element threw");
+                return std::unexpected(HazeInternalError::BackendReplayFailed);
+            }
+        }
+    }
+
+    // Step 3: point the compiler at this graph's trace and ring dimension, then
+    // redirect the sticky last_trace_path by overwriting the active program
+    // directory with the snapshot's project (the trace file lands at exactly the
+    // path replay() resolves). set_ring_dimension + the copy are wrapped so no
+    // filesystem/backend exception escapes this noexcept boundary.
+    try {
+        niobium::compiler().set_ring_dimension(ring_dim);
+        const std::filesystem::path program_dir = niobium::compiler().get_program_directory();
+        if (program_dir != snapshot.project_dir) {
+            std::filesystem::create_directories(program_dir);
+            std::filesystem::copy(snapshot.project_dir, program_dir,
+                                  std::filesystem::copy_options::recursive |
+                                      std::filesystem::copy_options::overwrite_existing);
+        }
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "replay_snapshot_locked: program directory redirect failed");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+
+    // Step 4: dispatch replay. CompilerBackend::replay() already contains the C
+    // ABI exception guard; a failed replay aborts before any shadow is touched.
+    if (!CompilerBackend::replay()) {
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "replay_snapshot_locked (replay)");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+
+    // Step 5: read each freshly-computed output and repopulate its shadow.
+    // fhetch::result() deserializes the just-written probe and can throw a
+    // cereal exception on a corrupt/truncated probe file; catch it so a clean
+    // HAZE_ERROR_INTERNAL crosses the C ABI instead of a C++ exception.
+    for (const auto &[addr, name] : snapshot.outputs) {
+        std::vector<uint64_t> values;
+        try {
+            fhetch::Polynomial result_poly;
+            if (!fhetch::result(name, result_poly)) {
                 std::ostringstream body;
-                body << "replay_snapshot_locked: no computed value for output '" << name
-                     << "' at addr 0x" << std::hex << to_uintptr(addr) << std::dec;
+                body << "replay_snapshot_locked: result('" << name << "') unavailable for addr 0x"
+                     << std::hex << to_uintptr(addr) << std::dec;
                 record_internal_error(HazeInternalError::BackendOutputMissing, body.str().c_str());
                 return std::unexpected(HazeInternalError::BackendOutputMissing);
             }
-            // Copy (not move): several snapshot outputs may legitimately share a
-            // name (e.g. MRP residues), so each by_name entry can be consumed
-            // more than once.
-            std::vector<uint64_t> values = it->second;
-            if (auto r = allocator().update_shadow(addr, std::move(values)); !r)
-                return std::unexpected(r.error());
+            if (!extract_polynomial_values(result_poly, name, values)) {
+                std::ostringstream body;
+                body << "replay_snapshot_locked: failed to extract values for '" << name
+                     << "' at addr 0x" << std::hex << to_uintptr(addr) << std::dec;
+                record_internal_error(HazeInternalError::BackendOutputDecodeFailed,
+                                      body.str().c_str());
+                return std::unexpected(HazeInternalError::BackendOutputDecodeFailed);
+            }
+        } catch (...) {
+            record_internal_error(HazeInternalError::BackendReplayFailed,
+                                  "replay_snapshot_locked: reading replay output threw");
+            return std::unexpected(HazeInternalError::BackendReplayFailed);
         }
-        return {};
-    } catch (...) {
-        record_internal_error(HazeInternalError::BackendReplayFailed,
-                              "replay_snapshot_locked: exception during replay/readback");
-        return std::unexpected(HazeInternalError::BackendReplayFailed);
+        // update_shadow runs under the epoch lock, preserving epoch -> allocator
+        // lock order.
+        if (auto r = allocator().update_shadow(addr, std::move(values)); !r)
+            return std::unexpected(r.error());
     }
+
+    // Every output shadow repopulated from the freshly-replayed probes.
+    return {};
 }
 
 bool EpochState::capturing_locked() const noexcept {

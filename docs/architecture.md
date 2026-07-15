@@ -80,7 +80,8 @@ bookkeeping, and replay dispatch happen.
   `kHbmBase = 0x4000000000` (256 GiB), the virtual HBM base that keeps Haze-allocated
   addresses above FHETCH's synthetic address range.
 - [`log.{hpp,cpp}`](../src/common/log.hpp) — the tagged `haze::log_error` sink,
-  extended with structured logging and correlation IDs keyed to the epoch and stream
+  extended with structured logging and a correlation ID keyed to the recording
+  epoch (streams are documented no-ops), plus an opt-in span-tracing facility
   (see [`./observability/README.md`](./observability/README.md)).
 - [`thread_safety.hpp`](../src/common/thread_safety.hpp) — the Clang
   thread-safety-analysis macros (`HAZE_GUARDED_BY`, `HAZE_REQUIRES`, `HAZE_EXCLUDES`)

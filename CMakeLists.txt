@@ -495,6 +495,7 @@ add_executable(haze_tests
   test/test_graph_capture.cpp
   test/test_peer_access.cpp
   test/test_performance_counters.cpp
+  test/test_observability.cpp
   # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
   # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.
   # `ops.cpp` is the shared per-mode operation library these tests build on.

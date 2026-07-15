@@ -151,7 +151,7 @@ std::expected<hazeGraphExec_t, HazeInternalError> graph_instantiate(hazeGraph_t 
     // cloned dir if any step after the secure clone fails.
     try {
         auto exec = std::make_unique<haze_exec_s>();
-        // Copy the graph's snapshot (outputs, target, topology, generations)...
+        // Copy the graph's snapshot (outputs, generations, target, inputs, sig)...
         exec->exec.snapshot = git->second->state.snapshot;
         // ...then give the exec its own independent on-disk copy.
         exec->exec.snapshot.project_dir = std::move(new_dir);
@@ -205,21 +205,31 @@ std::expected<void, HazeInternalError> graph_exec_update(hazeGraphExec_t exec,
     auto &exec_snap = eit->second->exec.snapshot;
     const auto &graph_snap = git->second->state.snapshot;
 
-    // G3 same-topology check: the two captures must have byte-identical recorded
-    // op sequences (the trace instruction bytes), not merely the same output
-    // addresses. This rejects a different operation that happens to write the
-    // same output address (e.g. a multiply refreshing an add-exec) — which the
-    // old address-only proxy accepted. A missing/empty topology on either side
-    // is treated as non-matching and rejected.
-    if (exec_snap.topology.empty() || graph_snap.topology.empty() ||
-        exec_snap.topology != graph_snap.topology)
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    // Defense in depth: the output binding table must also match exactly.
+    // G3 same-topology check. A valid refresh rebinds inputs but preserves both
+    // the tagged output addresses AND the recorded operation sequence.
+    //
+    // 1) Output-address check: the two snapshots must bind the same ordered set
+    //    of output addresses. This rejects a differing output cardinality or a
+    //    graph that tags a different device address than the exec it refreshes.
     if (exec_snap.outputs.size() != graph_snap.outputs.size())
         return std::unexpected(HazeInternalError::InvalidArgument);
     for (std::size_t i = 0; i < exec_snap.outputs.size(); ++i)
         if (exec_snap.outputs[i].first != graph_snap.outputs[i].first)
             return std::unexpected(HazeInternalError::InvalidArgument);
+    // 2) Operation-topology check: the recorded op-sequences must be
+    //    structurally identical. The output-address check alone would accept a
+    //    different operation that happens to write the SAME output address
+    //    (e.g. a multiply refreshing an add-exec at the same destination),
+    //    silently changing what the exec computes. The trace signature hashes
+    //    the instruction stream with operand register numbers canonicalized by
+    //    first-appearance order, so it is invariant to a pure input rebind yet
+    //    still distinguishes a genuine operation change. A zero signature means
+    //    it could not be computed for one side; treat that as a mismatch rather
+    //    than accepting an unverifiable refresh.
+    const uint64_t exec_sig = exec_snap.trace_signature;
+    const uint64_t graph_sig = graph_snap.trace_signature;
+    if (exec_sig == 0 || graph_sig == 0 || exec_sig != graph_sig)
+        return std::unexpected(HazeInternalError::InvalidArgument);
 
     // G4: build the replacement copy securely.
     auto cloned = secure_clone_project_dir(graph_snap.project_dir);
@@ -232,7 +242,7 @@ std::expected<void, HazeInternalError> graph_exec_update(hazeGraphExec_t exec,
     // freshly cloned dir is reclaimed — no half-updated, unlaunchable exec.
     EpochTraceSnapshot replacement;
     try {
-        replacement = graph_snap; // deep copy: outputs / target / topology / generations
+        replacement = graph_snap; // deep copy: outputs / generations / target / inputs / sig
     } catch (...) {
         std::error_code ec;
         std::filesystem::remove_all(*cloned, ec);

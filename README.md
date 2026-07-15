@@ -813,14 +813,19 @@ reinterpreted for the library context (the reasoning is recorded in
 
 - **Structured logging with correlation IDs** — the tagged sink in
   [`src/common/log.hpp`](src/common/log.hpp) /
-  [`src/common/log.cpp`](src/common/log.cpp) emits structured fields keyed by a
-  correlation ID tied to the current epoch / stream, so a single record ->
-  flush -> replay cycle can be followed end to end.
+  [`src/common/log.cpp`](src/common/log.cpp) stamps each line
+  (`[haze] [cid=<id>] <tag>: <body>`) with a correlation ID assigned by the
+  recording epoch (streams are documented no-ops), so a single record ->
+  flush -> replay cycle can be followed end to end. Lines are written with one
+  line-atomic `fwrite`, control/non-ASCII bytes are escaped, and absolute paths
+  are redacted to their basename to avoid leaking host layout.
 - **Metrics surface** — the "metrics endpoint" is the `hazeGetPerformanceCounters`
   query surface, reporting op counts, bytes moved, and flush timings via the
   additive `hazePerformanceCounters` struct.
-- **Tracing** — op / epoch spans trace the record -> flush -> replay path,
-  including the crossing into the `replay_bridge/` OpenFHE boundary.
+- **Tracing** — opt-in op / epoch spans (enabled via the `HAZE_TRACE`
+  environment variable, re-read on each span so it can be toggled at runtime;
+  **off by default**) trace the record -> flush -> replay path, including the
+  crossings into the `replay_bridge/` OpenFHE boundary.
 - **Health / readiness** — maps to lifecycle and config-state introspection
   (whether a device is configured, an epoch is open, and it has flushed).
 - **Dashboard template** — a ready-to-import template ships under

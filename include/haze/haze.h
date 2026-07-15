@@ -399,6 +399,18 @@ HAZE_API hazeError_t hazeModUp(void *const *dst, const void *const *src, const v
 // called repeatedly, relying on DevAddr operand stability across replays;
 // hazeGraphExecUpdate refreshes a same-topology exec; hazeGraphExecDestroy
 // and hazeGraphDestroy release the exec and graph respectively.
+//
+// Concurrency across processes: recording, instantiate, and launch materialize
+// their trace and serialized-probe artifacts under the active program directory
+// (see hazeSetProgramDirectory; the default is derived from the program name).
+// Multiple processes that share one program directory will overwrite one
+// another's artifacts, which can produce cross-process data mixing and, when a
+// process reads a probe another process is mid-write, a partial/corrupt read.
+// Each process that records or replays concurrently MUST therefore select a
+// distinct program directory with hazeSetProgramDirectory before its first
+// compute call. A corrupt or partial on-disk artifact is always reported as a
+// representable error (HAZE_ERROR_INTERNAL) and never as a C++ exception
+// crossing the C ABI. Single-process use requires no directory override.
 
 HAZE_API hazeError_t hazeStreamBeginCapture(hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeStreamEndCapture(hazeStream_t stream, hazeGraph_t *graph) HAZE_NOEXCEPT;
