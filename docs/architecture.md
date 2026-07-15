@@ -9,7 +9,7 @@ layer below [`niobium-client`](https://github.com/NiobiumInc/niobium-client): wh
 `niobium-client` integrates at OpenFHE's `EvalAdd` / `EvalMult` boundary, Haze
 integrates at the polynomial level (`NTT`, `Add`, `Mul`, `Automorph`, `BasisConvert`).
 The shape is deliberately CUDA's so that CUDA-resident FHE libraries — for example
-[FIDESlib](https://github.com/CKKS-Community/FIDESlib) — can be retargeted to Niobium
+[FIDESlib](https://github.com/CAPS-UMU/FIDESlib) — can be retargeted to Niobium
 hardware with minimal porting effort. This page describes the architecture as it is
 built; the reasoning behind each design choice lives in
 [`./decision-log.md`](./decision-log.md).

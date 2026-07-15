@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Haze (libhaze) — Executive Summary</title>
+  <meta name="description" content="Executive summary of the Haze (libhaze) initiative: advancing a C++23 record-and-replay runtime with a CUDA-shaped C ABI for the Niobium FHE accelerator into a benchmarked, coverage-gated, documented library.">
 
   <!-- Pinned reveal.js 5.1.0 structural stylesheets (layout only; Blitzy theme is inline below) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reset.css">
@@ -45,6 +46,15 @@
     }
 
     html, body, .reveal { background: var(--bg); }
+    /* Keep reveal.js scroll view on the dark brand theme. Scroll view can auto-activate on narrow
+       fresh loads (see decision log D-15); its layers default to white in reveal.css, which would
+       render the light body text near-invisible. These overrides guarantee the dark background and
+       legible text regardless of whether the deck opens in slide or scroll view. */
+    .reveal-viewport,
+    .reveal-viewport.reveal-scroll,
+    .reveal-viewport .scroll-page,
+    .reveal-viewport .scroll-page-content,
+    .reveal-viewport .scroll-page .scroll-page-content { background-color: var(--bg) !important; color: var(--text); }
     .reveal { font-family: var(--font-main); color: var(--text); }
     .reveal h1, .reveal h2, .reveal h3 { color: var(--text); font-family: var(--font-main); font-weight: 650; letter-spacing: -0.01em; line-height: 1.1; text-transform: none; }
     .reveal h1 { font-size: 64px; }
@@ -208,6 +218,18 @@
     .svg-chart { width: 100%; height: auto; display: block; }
     .svg-chart text { font-family: var(--font-main); fill: var(--muted); }
     .svg-chart .bar-label { fill: var(--text); font-size: 22px; }
+    /* Slide 10 gauge center label: HTML inside <foreignObject> (see decision log D-14). Scales with
+       the SVG viewBox exactly like the ring, and the gradient is applied via .grad-text
+       background-clip so it rasterizes correctly under reveal.js fractional transform scaling. */
+    .gauge-center { width: 300px; height: 300px; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 2px; text-align: center; font-family: var(--font-main); }
+    .gauge-center .gauge-num { font-size: 72px; font-weight: 800; line-height: 1; }
+    .gauge-center .gauge-cap { font-size: 20px; color: var(--muted); line-height: 1.1; }
+    /* Slide 11 progress labels: rendered as flanking HTML (see decision log D-14) rather than SVG
+       <text>, which mis-paints in the extreme 1000x92 viewBox under fractional transform scaling. */
+    .prog-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; font-family: var(--font-main); }
+    .prog-row .prog-l { font-size: 22px; color: var(--muted); }
+    .prog-row .prog-r { font-size: 22px; color: var(--text); }
 
     /* Timeline */
     .timeline { position: relative; margin-top: 46px; padding: 0 12px; }
@@ -256,6 +278,17 @@
     /* Mermaid containment so diagrams fit the 1080px canvas */
     .reveal .mermaid { display: flex; justify-content: center; }
     .reveal .mermaid svg { max-width: 100% !important; height: auto !important; max-height: 820px; }
+    /* Mermaid diagrams load from a pinned CDN as a best-effort enhancement (see decision log D-13).
+       A node stays hidden until it is rendered or replaced with a fallback caption, so no raw
+       diagram source ever flashes and no slide is left blank when the CDN is unreachable. */
+    .reveal .mermaid:not([data-processed]) { visibility: hidden; }
+    .mermaid-fallback {
+      display: flex; align-items: center; justify-content: center;
+      min-height: 220px; padding: 28px 32px;
+      border: 1px dashed var(--brand-indigo); border-radius: 16px;
+      background: rgba(19,24,38,0.55); color: var(--muted);
+      font-family: var(--font-main); font-size: 24px; text-align: center;
+    }
     /* Prevent deck typography from leaking into Mermaid labels (keeps node box sizing accurate) */
     .reveal .mermaid p,
     .reveal .mermaid span,
@@ -451,7 +484,7 @@ graph LR
               <text class="bar-label" x="310" y="304" text-anchor="middle">NTT</text>
               <text class="bar-label" x="402" y="304" text-anchor="middle">autom.</text>
               <text class="bar-label" x="494" y="304" text-anchor="middle">replay</text>
-              <text x="70" y="330" font-size="18">relative cost (illustrative — no measured values)</text>
+              <text x="70" y="330" font-size="18px">relative cost (illustrative — no measured values)</text>
             </svg>
             <div class="chart-cap"><i data-lucide="triangle-alert"></i>Illustrative only — not measured benchmark results.</div>
           </div>
@@ -524,9 +557,12 @@ graph LR
               <circle cx="150" cy="150" r="118" fill="none" stroke="url(#gaugeGrad)" stroke-width="26"
                       stroke-linecap="round" stroke-dasharray="593.4 741.8"
                       transform="rotate(-90 150 150)"/>
-              <text x="150" y="150" text-anchor="middle" dominant-baseline="central"
-                    font-size="72" font-weight="800" style="fill:url(#gaugeGrad);">80%</text>
-              <text x="150" y="205" text-anchor="middle" font-size="20">line-coverage target</text>
+              <foreignObject x="0" y="0" width="300" height="300" aria-hidden="true">
+                <div xmlns="http://www.w3.org/1999/xhtml" class="gauge-center">
+                  <div class="gauge-num grad-text">80%</div>
+                  <div class="gauge-cap">line-coverage target</div>
+                </div>
+              </foreignObject>
             </svg>
             <div class="chart-cap" style="color:var(--muted);"><i data-lucide="shield-check" style="color:var(--brand-cyan);"></i>scoped to src/core/ + src/api/</div>
           </div>
@@ -540,17 +576,19 @@ graph LR
         <h2 class="slide-title">Backfill to full coverage, then harden</h2>
         <p class="lead muted" style="margin-bottom:12px;">Backfill the remaining public functions (~54 of 77 exercised → target all 77) and add nine categories of negative / boundary hardening tests under ASan / UBSan / TSan.</p>
         <div class="chart-wrap" style="margin-bottom:22px;">
-          <svg class="svg-chart" viewBox="0 0 1000 92" role="img" aria-label="Public API coverage progress bar, roughly 54 of 77">
+          <div class="prog-row">
+            <span class="prog-l">public API coverage</span>
+            <span class="prog-r">~54 / 77 &#8594; 77</span>
+          </div>
+          <svg class="svg-chart" viewBox="0 0 1000 34" role="img" aria-label="Public API coverage progress bar, roughly 54 of 77">
             <defs>
               <linearGradient id="progGrad" x1="0" y1="0" x2="1" y2="0">
                 <stop offset="0%" stop-color="#6D5EF6"/>
                 <stop offset="100%" stop-color="#22D3EE"/>
               </linearGradient>
             </defs>
-            <text x="4" y="27" font-size="22" style="fill:#9AA6BF;">public API coverage</text>
-            <text x="996" y="27" font-size="22" style="fill:#E7EAF3;" text-anchor="end">~54 / 77 &#8594; 77</text>
-            <rect x="0" y="46" width="1000" height="34" rx="17" fill="#232B3E"/>
-            <rect x="0" y="46" width="701" height="34" rx="17" fill="url(#progGrad)"/>
+            <rect x="0" y="0" width="1000" height="34" rx="17" fill="#232B3E"/>
+            <rect x="0" y="0" width="701" height="34" rx="17" fill="url(#progGrad)"/>
           </svg>
         </div>
         <div class="tile-grid cols-3" style="gap:16px;">
@@ -696,62 +734,89 @@ graph LR
   <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
   <!-- Lucide UMD (classic script -> sets window.lucide) -->
   <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
-  <!-- Mermaid is ESM-only in v11; import + orchestrate render before reveal init -->
+  <!-- Deck bootstrap: reveal.js and Lucide come up first and independently of Mermaid, which is
+       then loaded via a dynamic import() so a diagram-CDN outage degrades to captioned fallbacks
+       instead of blanking the deck (see decision log D-13). -->
   <script type="module">
-    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11.4.0/dist/mermaid.esm.min.mjs';
-
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: 'base',
-      securityLevel: 'loose',
-      themeVariables: {
-        background: '#0B0E14',
-        primaryColor: '#171D2E',
-        primaryTextColor: '#E7EAF3',
-        primaryBorderColor: '#6D5EF6',
-        secondaryColor: '#131826',
-        tertiaryColor: '#0F1420',
-        lineColor: '#22D3EE',
-        textColor: '#E7EAF3',
-        mainBkg: '#171D2E',
-        nodeBorder: '#6D5EF6',
-        clusterBkg: '#0F1420',
-        clusterBorder: '#232B3E',
-        edgeLabelBackground: '#0B0E14',
-        fontSize: '26px'
-      },
-      flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true }
-    });
-
-    // Render every diagram to a full-size SVG string, then inject.
-    const nodes = [...document.querySelectorAll('.mermaid')];
-    for (let i = 0; i < nodes.length; i++) {
-      const def = nodes[i].textContent.trim();
-      try {
-        const { svg } = await mermaid.render('mmd-' + i, def);
-        nodes[i].innerHTML = svg;
-        nodes[i].setAttribute('data-processed', 'true');
-      } catch (e) { console.error('Mermaid render failed for diagram', i, e); }
-    }
-
-    // Replace all Lucide <i data-lucide> placeholders with SVGs.
+    // Resolve Lucide icon placeholders up front (safe no-op if the UMD bundle did not load).
     if (window.lucide) window.lucide.createIcons();
 
-    // Initialize reveal.js with the mandatory config.
-    await Reveal.initialize({
-      hash: true,
-      transition: 'slide',
-      width: 1920,
-      height: 1080,
-      margin: 0.04,
-      controls: true,
-      progress: true,
-      slideNumber: 'c/t',
-      center: false
-    });
+    // Bring reveal.js up FIRST, guarded on window.Reveal, so the deck is styled and navigable
+    // regardless of whether Mermaid later loads. A static top-level `import` of Mermaid would abort
+    // this whole module on a CDN miss; that failure mode is what decision log D-13 removes.
+    if (window.Reveal) {
+      await Reveal.initialize({
+        hash: true,
+        transition: 'slide',
+        width: 1920,
+        height: 1080,
+        margin: 0.04,
+        controls: true,
+        progress: true,
+        slideNumber: 'c/t',
+        center: false,
+        scrollActivationWidth: null
+      });
 
-    // Re-resolve icons that enter the DOM after layout changes.
-    Reveal.on('slidechanged', () => { if (window.lucide) window.lucide.createIcons(); });
+      // Re-resolve icons that enter the DOM after layout changes.
+      Reveal.on('slidechanged', () => { if (window.lucide) window.lucide.createIcons(); });
+    }
+
+    // Mermaid (ESM-only in v11) is a best-effort enhancement loaded AFTER reveal init. The dynamic
+    // import() confines any network failure to the try/catch below so the deck stays intact.
+    const nodes = [...document.querySelectorAll('.mermaid')];
+    try {
+      const { default: mermaid } = await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.0/dist/mermaid.esm.min.mjs');
+
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'base',
+        securityLevel: 'loose',
+        themeVariables: {
+          background: '#0B0E14',
+          primaryColor: '#171D2E',
+          primaryTextColor: '#E7EAF3',
+          primaryBorderColor: '#6D5EF6',
+          secondaryColor: '#131826',
+          tertiaryColor: '#0F1420',
+          lineColor: '#22D3EE',
+          textColor: '#E7EAF3',
+          mainBkg: '#171D2E',
+          nodeBorder: '#6D5EF6',
+          clusterBkg: '#0F1420',
+          clusterBorder: '#232B3E',
+          edgeLabelBackground: '#0B0E14',
+          fontSize: '26px'
+        },
+        flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true }
+      });
+
+      // Render every diagram to a full-size SVG string, then inject. A single diagram failure
+      // falls back to a caption without affecting the others.
+      for (let i = 0; i < nodes.length; i++) {
+        const def = nodes[i].textContent.trim();
+        try {
+          const { svg } = await mermaid.render('mmd-' + i, def);
+          nodes[i].innerHTML = svg;
+          nodes[i].setAttribute('data-processed', 'true');
+        } catch (e) {
+          console.error('Mermaid render failed for diagram', i, e);
+          nodes[i].innerHTML = '<div class="mermaid-fallback">Diagram unavailable</div>';
+          nodes[i].setAttribute('data-processed', 'true');
+        }
+      }
+    } catch (e) {
+      // The Mermaid module itself could not load (offline / CDN blocked). Replace each diagram
+      // source with a styled caption so no raw source shows and no slide is blank.
+      console.error('Mermaid module load failed; using diagram fallbacks', e);
+      for (const node of nodes) {
+        node.innerHTML = '<div class="mermaid-fallback">Diagram unavailable offline</div>';
+        node.setAttribute('data-processed', 'true');
+      }
+    }
+
+    // Diagram injection can change slide heights; re-layout so reveal.js re-fits content.
+    if (window.Reveal && typeof Reveal.layout === 'function') Reveal.layout();
   </script>
 </body>
 </html>

@@ -12,7 +12,7 @@ at the OpenFHE level (probes intercept `EvalMult`, `EvalAdd`, ...) haze
 integrates one layer below: each public entry point is a single polynomial-level
 op (`NTT`, `MUL`, `ADDP`, basis convert, ...). The shape is deliberately CUDA's
 so that GPU FHE libraries written against CUDA — for example
-[FIDESlib](https://github.com/CKKS-Community/FIDESlib) — can be retargeted to
+[FIDESlib](https://github.com/CAPS-UMU/FIDESlib) — can be retargeted to
 Niobium hardware with minimal porting effort.
 
 For the FHETCH Polynomial IR instruction set, session API, trace format, and
