@@ -126,7 +126,7 @@ HAZE_RUNS_DIR = $(CURDIR)/$(BUILD_DIR)/runs
 # ==============================================================================
 
 .PHONY: help sync \
-        config build bench \
+        config build bench coverage \
         config-openfhe build-openfhe \
         config-test-openfhe build-test-openfhe \
         test-unit test-sim test-e2e test-readme test-transport test-isolation test test-all \
@@ -146,6 +146,8 @@ Usage: make <target> [MODE=debug|release]
     bench               Build + run the Google Benchmark suite (MODE=release
                         recommended); writes JSON and prints how to refresh
                         benchmark/baseline.json
+    coverage            Build instrumented, run tests, emit coverage report +
+                        80% line-coverage gate on src/core + src/api (P2c)
     config-openfhe      Configure OpenFHE
     build-openfhe       Build and install OpenFHE locally
     config-test-openfhe Configure the stock OpenFHE (for haze_e2e_tests)
@@ -301,6 +303,32 @@ bench: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Build + run the Google
 	    --benchmark_out="$(HAZE_BENCH_OUT)" --benchmark_out_format=json
 	@echo "benchmark JSON written to $(HAZE_BENCH_OUT)"
 	@echo "to refresh the regression baseline: cp '$(HAZE_BENCH_OUT)' benchmark/baseline.json"
+
+# ==============================================================================
+# Haze Coverage (opt-in; Clang source-based) — P2c
+# ==============================================================================
+
+# Configure the SAME build dir as `config` but instrumented for Clang
+# source-based coverage: -DHAZE_COVERAGE=ON enables -fprofile-instr-generate
+# -fcoverage-mapping. The option is OFF by default, so the shipped libhaze and
+# the default `make build` / `make test` flow stay byte-for-byte unaffected.
+# Build the full tree so the instrumented haze_tests exists, then hand off to
+# scripts/coverage.sh: it runs the tests to emit *.profraw, merges them with
+# llvm-profdata, exports an lcov tracefile scoped to src/core + src/api with
+# llvm-cov, and enforces the 80% line-coverage gate. llvm-cov / llvm-profdata
+# ship with the Clang 19 toolchain, so no extra runtime dependency is needed.
+# Honours MODE like every other target.
+coverage: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Build instrumented, run tests, emit coverage report + 80% line-coverage gate
+	cmake -S "$(CURDIR)" -B "$(CURDIR)/$(BUILD_DIR)" \
+		-DCMAKE_BUILD_TYPE=$(CMAKE_CONFIG) \
+		-DOPENFHE_INSTALL_DIR="$(OPENFHE_INSTALL_DIR)" \
+		-DHAZE_BUILD_E2E_TESTS=$(HAZE_BUILD_E2E_TESTS) \
+		-DHAZE_TEST_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
+		-DHAZE_COVERAGE=ON \
+		$(CMAKE_FHETCH_DIR_FLAG) \
+		$(CMAKE_JSON_INCLUDE_DIR_FLAG)
+	cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --config $(CMAKE_CONFIG)
+	@BUILD_DIR="$(BUILD_DIR)" HAZE_RUNS_DIR="$(HAZE_RUNS_DIR)" scripts/coverage.sh
 
 # ==============================================================================
 # Haze Tests
