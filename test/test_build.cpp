@@ -24,10 +24,11 @@ TEST_CASE("hazeGetLastError returns HAZE_SUCCESS by default", "[unit]") {
 
 TEST_CASE("hazeGetLastError clears after read", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    // Use a graph stub to set a real error, then verify clear-on-read semantics.
-    const hazeError_t ignored = hazeStreamBeginCapture(nullptr);
+    // Use an invalid-argument call to set a real error, then verify
+    // clear-on-read semantics.
+    const hazeError_t ignored = hazeGraphDestroy(nullptr);
     (void)ignored;
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
     REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
 }
 
@@ -49,18 +50,17 @@ TEST_CASE("hazeGetDeviceCount compiles and links", "[unit]") {
     REQUIRE(count == 1);
 }
 
-// Graph capture returns NOT_SUPPORTED rather than silently no-op'ing on
-// purpose: a no-op hazeStreamBeginCapture would hand back a bogus SUCCESS, and
-// the eventual hazeStreamEndCapture would give the caller a null/empty graph
-// that looks real — corrupting any graph-replay code path. An explicit
-// error surfaces the missing feature immediately.
-TEST_CASE("graph API returns HAZE_ERROR_NOT_SUPPORTED", "[unit]") {
+// Graph capture is implemented on top of the epoch recording system. The C ABI
+// entry points validate their arguments and reject null handles with
+// HAZE_ERROR_INVALID_VALUE; full capture/instantiate/launch/replay behavior is
+// covered by test_graph_capture.cpp.
+TEST_CASE("graph API is implemented and validates its arguments", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeGraphDestroy(nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
-    REQUIRE(hazeStreamEndCapture(nullptr, nullptr) == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeGraphExecDestroy(nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
-    REQUIRE(hazeGraphDestroy(nullptr) == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeGraphLaunch(nullptr, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
@@ -94,8 +94,8 @@ TEST_CASE("successful stubs do not pollute error state", "[unit]") {
 TEST_CASE("error state is thread-local", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // Set an error in the main thread.
-    hazeStreamBeginCapture(nullptr);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_NOT_SUPPORTED);
+    hazeGraphDestroy(nullptr);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
 
     // Error from another thread must not bleed into main thread.
     hazeError_t child_err = HAZE_SUCCESS;
@@ -103,7 +103,7 @@ TEST_CASE("error state is thread-local", "[unit]") {
         // Child thread has its own clean error state.
         child_err = hazeGetLastError();
         // Set an error from the child; main thread must not see it.
-        hazeStreamBeginCapture(nullptr);
+        hazeGraphDestroy(nullptr);
     });
     t.join();
 

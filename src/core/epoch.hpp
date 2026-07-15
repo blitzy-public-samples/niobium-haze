@@ -156,8 +156,9 @@ class EpochState {
     std::string mrp_group_name_locked(bool output, DevAddr leading) HAZE_REQUIRES(mutex_);
 
     // Enter graph-capture mode: open a recording (via ensure_recording_locked)
-    // and set capturing_. No effect if a capture is already active.
-    void begin_capture_locked() noexcept HAZE_REQUIRES(mutex_);
+    // and set capturing_. Rejects a nested begin (a capture already active)
+    // with InvalidArgument and leaves the in-progress capture intact.
+    std::expected<void, HazeInternalError> begin_capture_locked() noexcept HAZE_REQUIRES(mutex_);
 
     // Finalize the open recording to an on-disk project dir, copy it to a
     // graph-private unique directory, record the output binding table, clear

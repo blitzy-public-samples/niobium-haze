@@ -108,7 +108,14 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     }
 
     const uint64_t ring_dim = config().ring_dim();
-    auto components = allocator().extract_polynomial_components(addr, ring_dim);
+    // Graph capture must not consume the caller's input buffers: capturing a
+    // graph leaves the user's device allocations intact and reusable (CUDA
+    // stream-capture semantics), so a subsequent capture reading the same
+    // inputs still resolves. Read non-evictingly while a capture is active;
+    // outside capture the evicting read frees the HAZE-side shadow mid-program
+    // as before.
+    auto components = capturing_ ? allocator().read_polynomial_components(addr, ring_dim)
+                                 : allocator().extract_polynomial_components(addr, ring_dim);
     if (!components) {
         // Compute / D2D on an addr with neither shadow data nor a
         // poly_map_ binding is undefined under the record-and-replay
@@ -499,30 +506,33 @@ void EpochState::clear_state_locked() noexcept {
     niobium::compiler().clear_captured();
 }
 
-void EpochState::begin_capture_locked() noexcept {
+std::expected<void, HazeInternalError> EpochState::begin_capture_locked() noexcept {
     // Nested capture is a caller error; leave the in-progress capture intact.
     if (capturing_) {
         record_internal_error(HazeInternalError::InvalidArgument,
                               "begin_capture_locked: capture already active");
-        return;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     }
     capturing_ = true;
     // Open a recording for the capture region (no-op if one is already open,
     // e.g. from a preceding H2D eager-tag).
     ensure_recording_locked();
+    return {};
 }
 
 std::expected<EpochTraceSnapshot, HazeInternalError>
 EpochState::end_capture_snapshot_locked() noexcept {
-    // No active capture: nothing to end.
+    // No active capture: ending without a matching begin is an illegal-state
+    // transition, distinct from ending an empty capture.
     if (!capturing_) {
-        record_internal_error(HazeInternalError::SourceUnavailable,
+        record_internal_error(HazeInternalError::InvalidArgument,
                               "end_capture_snapshot_locked: no active capture");
-        return std::unexpected(HazeInternalError::SourceUnavailable);
+        return std::unexpected(HazeInternalError::InvalidArgument);
     }
-    // Capture opened but nothing was recorded: mirror tag_output's
-    // empty-recording contract and leave capture mode cleanly.
-    if (!recording_) {
+    // Capture opened but nothing was recorded (no compute op emitted an
+    // output): mirror the empty-recording contract, leave capture mode
+    // cleanly, and report the empty capture instead of failing deeper.
+    if (!recording_ || (pending_outputs_.empty() && pending_mrp_groups_.empty())) {
         capturing_ = false;
         clear_state_locked();
         record_internal_error(HazeInternalError::SourceUnavailable,

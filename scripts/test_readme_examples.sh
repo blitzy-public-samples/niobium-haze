@@ -12,6 +12,9 @@
 # it through the in-process FHETCH simulator (HAZE_TARGET=local), and asserts
 # exit 0 plus the expected output token. It fails loudly if a marker region is
 # missing or a compile/run/assert fails, so the published code cannot rot.
+# It also verifies the migrated examples/quickstart.c and examples/ckks22.cpp
+# match their README marker regions byte-for-byte (README is the source of
+# truth), failing loudly on drift so examples/ cannot diverge from the docs.
 #
 # Resolves the repo root from `git rev-parse` (falls back to the script's
 # `$(dirname BASH_SOURCE)/..` outside a git checkout, e.g. inside a nix
@@ -30,6 +33,8 @@
 #                            program_dir stays out of the source root (default:
 #                            $root/$BUILD_DIR/runs).
 #   CC / CXX                 compilers (default: cc / c++).
+#   EXAMPLES_DIR             dir holding the migrated runnable examples
+#                            (default: $root/examples).
 
 set -euo pipefail
 
@@ -61,6 +66,7 @@ stock_openfhe_dir="${STOCK_OPENFHE_DIR:-$root/vendor/lib/openfhe-stock}"
 runs_dir="${HAZE_RUNS_DIR:-$root/$build_dir/runs}"
 cc="${CC:-cc}"
 cxx="${CXX:-c++}"
+examples_dir="${EXAMPLES_DIR:-$root/examples}"
 
 [[ -f "$readme" ]] || {
     printf 'error: README not found: %s\n' "$readme" >&2
@@ -96,8 +102,29 @@ extract_to() {
     }
 }
 
+# Assert a migrated examples/ file matches its authoritative README region
+# byte-for-byte. The README marker regions are the source of truth; a drift
+# here means examples/ fell out of sync and must be regenerated from README.
+check_mirror() {
+    local extracted="$1" mirror="$2" name="$3"
+    if [[ ! -f "$mirror" ]]; then
+        printf 'error: examples file missing: %s (must mirror README region name=%s)\n' \
+            "$mirror" "$name" >&2
+        exit 1
+    fi
+    if ! diff -u --label "README:name=$name" --label "$mirror" "$extracted" "$mirror"; then
+        printf 'error: %s drifted from README region name=%s (README is the source of truth; regenerate examples/ from the README markers)\n' \
+            "$mirror" "$name" >&2
+        exit 1
+    fi
+}
+
 extract_to quickstart "$scratch/quickstart.c"
 extract_to ckks22 "$scratch/ckks22.cpp"
+
+printf '[readme] verifying examples/ mirror the README regions (README is source of truth)\n'
+check_mirror "$scratch/quickstart.c" "$examples_dir/quickstart.c" quickstart
+check_mirror "$scratch/ckks22.cpp"   "$examples_dir/ckks22.cpp"   ckks22
 
 printf '[readme] compiling C example (quickstart.c)\n'
 "$cc" -std=c11 -O2 \
