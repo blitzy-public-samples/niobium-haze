@@ -155,6 +155,25 @@ if(HAZE_TSAN)
 endif()
 
 # ---------------------------------------------------------------------------
+# Coverage option (P2c) — Clang source-based coverage instrumentation
+# ---------------------------------------------------------------------------
+# Independent of the sanitizer options above; coverage may be combined with a
+# normal build (the coverage CI job runs its own configuration). Gated behind
+# the option so ordinary builds are byte-for-byte unaffected. llvm-cov /
+# llvm-profdata ship with the Clang 19 toolchain, so no new runtime dependency
+# is added — only these compile/link flags, consumed by scripts/coverage.sh.
+option(HAZE_COVERAGE
+       "Instrument with Clang source-based coverage (-fprofile-instr-generate -fcoverage-mapping)." OFF)
+
+if(HAZE_COVERAGE)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "HAZE_COVERAGE requires Clang (source-based coverage via llvm-cov/llvm-profdata).")
+  endif()
+  add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+  add_link_options(-fprofile-instr-generate -fcoverage-mapping)
+endif()
+
+# ---------------------------------------------------------------------------
 # libhaze shared library
 # ---------------------------------------------------------------------------
 # Niobium::fhetch (libnbfhetch) supplies:
