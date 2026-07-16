@@ -2,11 +2,11 @@
 # Haze — standalone build entry
 # ==============================================================================
 # Build directory convention: dbuild/ for MODE=debug, build/ for MODE=release.
-# All targets honour MODE; defaults to release. See `make help`.
+# All targets honour MODE; defaults to debug. See `make help`.
 #
 # Override knobs (parent or user can supply):
 #   MODE                     debug | release. Selects build dir (dbuild|build)
-#                            and CMake config (Debug|Release). Default: release.
+#                            and CMake config (Debug|Release). Default: debug.
 #   NUM_CPUS                 Build parallelism. Auto-detected from sysctl/nproc;
 #                            override to throttle.
 #   NIOBIUM_HAZE_FHETCH_DIR  External niobium-fhetch source tree to use instead
@@ -141,7 +141,7 @@ define HAZE_HELP_TEXT
 Usage: make <target> [MODE=debug|release]
 
   Build:
-    config              Configure haze (uses MODE; default: release)
+    config              Configure haze (uses MODE; default: debug)
     build               Build haze
     bench               Build + run the Google Benchmark suite (MODE=release
                         recommended); writes JSON and prints how to refresh
@@ -266,6 +266,8 @@ config: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Configure haze (uses 
 		-DOPENFHE_INSTALL_DIR="$(OPENFHE_INSTALL_DIR)" \
 		-DHAZE_BUILD_E2E_TESTS=$(HAZE_BUILD_E2E_TESTS) \
 		-DHAZE_TEST_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
+		-DHAZE_COVERAGE=OFF \
+		-DHAZE_BUILD_BENCHMARKS=OFF \
 		$(CMAKE_FHETCH_DIR_FLAG) \
 		$(CMAKE_JSON_INCLUDE_DIR_FLAG)
 
@@ -293,6 +295,7 @@ bench: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Build + run the Google
 		-DHAZE_BUILD_E2E_TESTS=$(HAZE_BUILD_E2E_TESTS) \
 		-DHAZE_TEST_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
 		-DHAZE_BUILD_BENCHMARKS=ON \
+		-DHAZE_COVERAGE=OFF \
 		$(CMAKE_FHETCH_DIR_FLAG) \
 		$(CMAKE_JSON_INCLUDE_DIR_FLAG)
 	cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --config $(CMAKE_CONFIG) --target haze_benchmarks
@@ -326,6 +329,7 @@ coverage: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Build instrumented,
 		-DHAZE_TEST_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
 		-DHAZE_COVERAGE=ON \
 		-DHAZE_BUILD_TESTS=ON \
+		-DHAZE_BUILD_BENCHMARKS=OFF \
 		$(CMAKE_FHETCH_DIR_FLAG) \
 		$(CMAKE_JSON_INCLUDE_DIR_FLAG)
 	cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --config $(CMAKE_CONFIG)
