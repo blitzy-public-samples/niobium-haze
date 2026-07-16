@@ -107,7 +107,7 @@ flag regressions. This target is live today.
 > coverage driver [`../scripts/coverage.sh`](../scripts/coverage.sh)
 > (`llvm-profdata merge` followed by `llvm-cov export -format=lcov`) scoped to
 > `src/core/` and `src/api/`, with a CI gate requiring **80% line coverage**
-> across those two trees — currently passing at **85.38%**. `llvm-cov` /
+> across those two trees — currently passing at **85.70%**. `llvm-cov` /
 > `llvm-profdata` already ship with clang, so no new dependency is needed. See
 > [`./testing.md`](./testing.md) for the coverage workflow and
 > [`./decision-log.md`](./decision-log.md) (D-06, D-10) for the sequencing

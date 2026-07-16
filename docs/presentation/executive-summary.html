@@ -456,7 +456,7 @@ graph LR
         <div class="tile-grid cols-4">
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="blocks"></i></span><h3>Feature completion</h3></div><p>Graph capture, peer access, and performance counters — delivered where the record-and-replay model permits.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="gauge"></i></span><h3>Benchmarking</h3></div><p>A Google Benchmark harness with a CI regression gate.</p></div>
-          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="shield-check"></i></span><h3>Coverage gate</h3></div><p>An 80% line-coverage threshold on the core and API layers <em>(active — passing at 85.38%)</em>.</p></div>
+          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="shield-check"></i></span><h3>Coverage gate</h3></div><p>An 80% line-coverage threshold on the core and API layers <em>(active — passing at 85.70%)</em>.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="book-open"></i></span><h3>Docs &amp; examples</h3></div><p>A documentation tree plus runnable examples.</p></div>
         </div>
         <div class="footer"><span>Haze · libhaze</span><span class="fbrand wordmark">Blitzy</span></div>
@@ -473,7 +473,7 @@ graph LR
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P1</span></span></td><td>Benchmarking</td><td>Google Benchmark + <span class="mono">make bench</span> + CI regression gate</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Peer access</td><td>simulator-only (physical multi-chip = human follow-up)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Performance counters</td><td>additive counters via the API (delivered)</td></tr>
-            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Coverage</td><td>80% line-coverage gate on <span class="mono">src/core/</span> + <span class="mono">src/api/</span> (active — 85.38%)</td></tr>
+            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Coverage</td><td>80% line-coverage gate on <span class="mono">src/core/</span> + <span class="mono">src/api/</span> (active — 85.70%)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Tests</td><td>backfill + nine hardening categories under sanitizers (delivered)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P3</span></span></td><td>Docs &amp; examples</td><td><span class="mono">docs/</span> tree + runnable <span class="mono">examples/</span></td></tr>
           </tbody>
@@ -599,10 +599,10 @@ graph LR
         <div class="split">
           <div>
             <p class="lead">Clang source-based coverage (<span class="mono">llvm-profdata</span> + <span class="mono">llvm-cov</span>) — already in the toolchain, <strong>no new runtime dependency</strong>.</p>
-            <div style="margin:6px 0 10px;"><span class="badge ok"><i data-lucide="circle-check"></i>Delivered — <span class="mono">HAZE_COVERAGE</span> option, <span class="mono">make coverage</span> target, and CI gate all wired; passing at 85.38%</span></div>
+            <div style="margin:6px 0 10px;"><span class="badge ok"><i data-lucide="circle-check"></i>Delivered — <span class="mono">HAZE_COVERAGE</span> option, <span class="mono">make coverage</span> target, and CI gate all wired; passing at 85.70%</span></div>
             <ul class="clean">
               <li>Scoped to <span class="mono">src/core/</span> + <span class="mono">src/api/</span>.</li>
-              <li>A CI gate enforces <strong>80% line coverage</strong> <strong>(active — passing at 85.38%)</strong>.</li>
+              <li>A CI gate enforces <strong>80% line coverage</strong> <strong>(active — passing at 85.70%)</strong>.</li>
               <li>The coverage driver (<span class="mono">scripts/coverage.sh</span>), the <span class="mono">make coverage</span> target, the <span class="mono">HAZE_COVERAGE</span> option, and the CI gate are all wired and live.</li>
               <li>Sequenced <strong>after</strong> backfill and hardening raise coverage — so it never gates the branch red before coverage exists.</li>
             </ul>
