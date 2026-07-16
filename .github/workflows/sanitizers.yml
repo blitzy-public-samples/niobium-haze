@@ -31,8 +31,9 @@ jobs:
             build_dir: build-tsan
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           submodules: recursive
           fetch-depth: 1
 
@@ -59,7 +60,7 @@ jobs:
           echo "stock_rev=$stock_rev" >> "$GITHUB_OUTPUT"
 
       - name: Cache OpenFHE install dirs
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             vendor/niobium-fhetch/vendor/lib/openfhe
@@ -71,10 +72,10 @@ jobs:
             ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v22
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: Magic Nix Cache
-        uses: DeterminateSystems/magic-nix-cache-action@v13
+        uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
 
       # Instrumented OpenFHE (debug); installs to vendor/niobium-fhetch/vendor/lib/openfhe.
       - name: Build instrumented OpenFHE
@@ -99,20 +100,29 @@ jobs:
       # tree. ASan leg loads the repo-root LSan suppressions for known upstream leaks.
       - name: Run haze_tests (${{ matrix.name }})
         run: |
+          set -o pipefail
           mkdir -p ${{ matrix.build_dir }}/runs
           cd ${{ matrix.build_dir }}/runs
+          # Sanitizer reports go to sanitizer.log.<pid> under runs/; each suite's
+          # console output is mirrored to a transcript. Both are collected by the
+          # failure-artifact upload below.
           if [ "${{ matrix.name }}" = "asan-ubsan" ]; then
-            export LSAN_OPTIONS="suppressions=$GITHUB_WORKSPACE/.lsan_suppressions"
-            export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
+            export ASAN_OPTIONS="log_path=sanitizer.log"
+            export LSAN_OPTIONS="suppressions=$GITHUB_WORKSPACE/.lsan_suppressions:log_path=sanitizer.log"
+            export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1:log_path=sanitizer.log"
           else
-            export TSAN_OPTIONS="halt_on_error=1"
+            export TSAN_OPTIONS="halt_on_error=1:log_path=sanitizer.log"
           fi
-          HAZE_TARGET=local ../haze_tests "~[integration]"
-          HAZE_TARGET=local ../haze_tests "[integration]"
+          # Non-integration suite, integration suite, then the hidden
+          # [.][concurrency] lock-hardening cases (run on both legs; the
+          # [.][hardware] cases remain opt-in and are not run here).
+          HAZE_TARGET=local ../haze_tests "~[integration]" 2>&1 | tee run-default.log
+          HAZE_TARGET=local ../haze_tests "[integration]" 2>&1 | tee run-integration.log
+          HAZE_TARGET=local ../haze_tests "[concurrency]" 2>&1 | tee run-concurrency.log
 
       - name: Upload sanitizer logs on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sanitizer-logs-${{ matrix.name }}-${{ github.run_attempt }}
           path: ${{ matrix.build_dir }}/runs/
