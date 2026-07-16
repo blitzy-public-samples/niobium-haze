@@ -1,0 +1,83 @@
+name: coverage
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Coverage report + 80% gate (nix devshell)
+    runs-on: ubuntu-latest
+    env:
+      # Gate enforced inside scripts/coverage.sh; set here for visibility.
+      COVERAGE_THRESHOLD: "80"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h
+
+      - name: Verify nested submodules cloned
+        run: |
+          test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
+          test -d vendor/niobium-fhetch/vendor/json
+
+      - name: Capture OpenFHE submodule commits
+        id: openfhe_rev
+        run: |
+          rev=$(git -C vendor/niobium-fhetch/vendor/openfhe rev-parse HEAD)
+          stock_rev=$(git -C vendor/openfhe rev-parse HEAD)
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "stock_rev=$stock_rev" >> "$GITHUB_OUTPUT"
+
+      - name: Cache OpenFHE install dirs
+        uses: actions/cache@v5
+        with:
+          path: |
+            vendor/niobium-fhetch/vendor/lib/openfhe
+            vendor/niobium-fhetch/vendor/openfhe/build
+            vendor/lib/openfhe-stock
+            vendor/openfhe/build
+          key: ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-${{ steps.openfhe_rev.outputs.rev }}-${{ steps.openfhe_rev.outputs.stock_rev }}
+          restore-keys: |
+            ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+
+      # Instrumented haze_tests only; the shipped libhaze is unaffected. The 80%
+      # line-coverage gate on src/core/ + src/api/ is enforced by scripts/coverage.sh.
+      - name: Build instrumented + coverage gate (make coverage)
+        run: nix develop --command make coverage MODE=release
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report-${{ github.run_attempt }}
+          path: build/coverage/
+          if-no-files-found: ignore
+          retention-days: 7

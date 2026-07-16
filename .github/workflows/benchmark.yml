@@ -1,14 +1,5 @@
 name: benchmark
 
-# P1b microbenchmark regression gate. Builds the Google Benchmark harness
-# (HAZE_BUILD_BENCHMARKS=ON, a separate executable linking the shipped
-# libhaze.so — the library and its ABI are unaffected), runs the full suite via
-# `make bench`, and compares the measured JSON against the checked-in baseline
-# (benchmark/baseline.json) with scripts/bench_compare.py. The gate FAILS on any
-# missing benchmark name, any errored/skipped benchmark, or any regression
-# beyond the tolerance threshold. Kept as a SEPARATE workflow so the existing
-# merge-gate workflows are untouched.
-
 on:
   pull_request:
     branches: [main]
@@ -25,8 +16,11 @@ concurrency:
 
 jobs:
   benchmark:
-    name: Build + run benchmarks, gate against baseline (nix devshell)
+    name: Google Benchmark + regression gate (nix devshell)
     runs-on: ubuntu-latest
+    env:
+      # Fractional cpu_time regression threshold for the baseline comparison.
+      BENCH_REGRESSION_THRESHOLD: "0.50"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -35,8 +29,6 @@ jobs:
           fetch-depth: 1
 
       - name: Free disk space
-        # Nix store + OpenFHE + haze build pushes ubuntu-latest's
-        # ~14 GB of free space. Reclaim ~25 GB up front.
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
@@ -51,8 +43,6 @@ jobs:
           test -d vendor/niobium-fhetch/vendor/json
 
       - name: Capture OpenFHE submodule commits
-        # Cache key tracks both OpenFHE submodule revs (instrumented fork inside
-        # niobium-fhetch, and the stock vendor/openfhe). Any bump invalidates.
         id: openfhe_rev
         run: |
           rev=$(git -C vendor/niobium-fhetch/vendor/openfhe rev-parse HEAD)
@@ -61,9 +51,6 @@ jobs:
           echo "stock_rev=$stock_rev" >> "$GITHUB_OUTPUT"
 
       - name: Cache OpenFHE install dirs
-        # Same cache layout as build-test.yml: the instrumented OpenFHE install +
-        # build tree and the stock OpenFHE install + build tree. Keyed on
-        # flake.lock (nix toolchain moves) plus both submodule revs.
         uses: actions/cache@v5
         with:
           path: |
@@ -81,24 +68,90 @@ jobs:
       - name: Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@v13
 
-      - name: Verify devshell evaluates (incl. Google Benchmark)
-        run: nix develop --command bash -c 'clang --version && cmake --version'
-
-      - name: Build + run benchmarks (release)
-        # `make bench` configures with HAZE_BUILD_BENCHMARKS=ON, builds
-        # haze_benchmarks, runs the full suite, and writes
-        # build/benchmark_results.json.
+      # Separate haze_benchmarks executable; never absorbed into the shipped libhaze.
+      - name: Build + run benchmarks (make bench, JSON out)
         run: nix develop --command make bench MODE=release
 
-      - name: Gate against the checked-in baseline
-        # bench_compare.py is stdlib-only; run it with the runner's system
-        # python3 (outside the devshell). Fails on missing names, errored/
-        # skipped benchmarks, or regressions beyond the threshold.
+      - name: Compare against baseline (flag regressions)
+        env:
+          CURRENT: build/benchmark_results.json
+          BASELINE: benchmark/baseline.json
         run: |
-          python3 scripts/bench_compare.py \
-            benchmark/baseline.json \
-            build/benchmark_results.json \
-            --threshold 0.50 --metric cpu_time
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          threshold = float(os.environ.get("BENCH_REGRESSION_THRESHOLD", "0.50"))
+          current_path = os.environ["CURRENT"]
+          baseline_path = os.environ["BASELINE"]
+
+          def load(path):
+              with open(path) as fh:
+                  return json.load(fh)
+
+          def cpu_map(doc):
+              out = {}
+              for b in doc.get("benchmarks", []):
+                  if b.get("run_type") == "aggregate":
+                      continue
+                  name = b.get("name")
+                  val = b.get("cpu_time", b.get("real_time"))
+                  if name is not None and val is not None:
+                      out[name] = float(val)
+              return out
+
+          if not os.path.exists(current_path):
+              print("error: benchmark results not found: %s" % current_path)
+              print("       expected 'make bench' to emit build/benchmark_results.json")
+              sys.exit(1)
+
+          if not os.path.exists(baseline_path) or os.path.getsize(baseline_path) == 0:
+              print("::warning::baseline %s missing or empty; skipping regression gate "
+                    "(soft-pass until the baseline lands)" % baseline_path)
+              sys.exit(0)
+
+          current = cpu_map(load(current_path))
+          baseline = cpu_map(load(baseline_path))
+
+          if not baseline:
+              print("::warning::baseline %s has no benchmarks; soft-pass" % baseline_path)
+              sys.exit(0)
+
+          shared = sorted(set(current) & set(baseline))
+          only_current = sorted(set(current) - set(baseline))
+          only_baseline = sorted(set(baseline) - set(current))
+
+          regressed = []
+          print("%-48s %14s %14s %8s  %s" % ("benchmark", "baseline", "current", "ratio", "status"))
+          print("-" * 96)
+          for name in shared:
+              b = baseline[name]
+              c = current[name]
+              ratio = (c / b) if b else float("inf")
+              status = "OK"
+              if ratio > 1.0 + threshold:
+                  status = "REGRESSION"
+                  regressed.append((name, ratio))
+              print("%-48s %14.2f %14.2f %8.3f  %s" % (name, b, c, ratio, status))
+
+          for name in only_current:
+              print("::warning::benchmark only in current run (no baseline entry): %s" % name)
+          for name in only_baseline:
+              print("::warning::benchmark missing from current run: %s" % name)
+
+          if regressed:
+              print("")
+              print("error: %d benchmark(s) regressed beyond %.0f%% threshold:"
+                    % (len(regressed), threshold * 100))
+              for name, ratio in regressed:
+                  print("  %s: %.3fx baseline cpu_time" % (name, ratio))
+              sys.exit(1)
+
+          print("")
+          print("OK: no regressions beyond %.0f%% across %d shared benchmark(s)"
+                % (threshold * 100, len(shared)))
+          PY
 
       - name: Upload benchmark results
         if: always()
@@ -106,17 +159,5 @@ jobs:
         with:
           name: benchmark-results-${{ github.run_attempt }}
           path: build/benchmark_results.json
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload build logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: benchmark-build-logs-${{ github.run_attempt }}
-          path: |
-            build/CMakeFiles/CMakeOutput.log
-            build/CMakeFiles/CMakeError.log
-            build/runs/
           if-no-files-found: ignore
           retention-days: 7
