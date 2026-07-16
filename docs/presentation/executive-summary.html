@@ -6,6 +6,13 @@
   <title>Haze (libhaze) — Executive Summary</title>
   <meta name="description" content="Executive summary of the Haze (libhaze) initiative: advancing a C++23 record-and-replay runtime with a CUDA-shaped C ABI for the Niobium FHE accelerator toward a benchmarked, coverage-gated, documented library.">
 
+  <!-- Responsive scope (QA I3): this executive deck targets desktop and projector
+       display at a fixed 1920x1080 reveal.js canvas (per Rule 3). reveal.js scales the
+       entire canvas uniformly to fit smaller viewports, so on very narrow screens
+       (e.g. ~390px phones) type appears small by design — that is inherent
+       letterboxing of a fixed-canvas presentation, not a layout defect. For the
+       intended experience, present full-screen on a 16:9 display. -->
+
   <!-- Pinned reveal.js 5.1.0 structural stylesheets (layout only; Blitzy theme is inline below) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reset.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
@@ -302,6 +309,63 @@
     .reveal .progress span { background: var(--grad); }
     .reveal .controls { color: var(--brand-indigo); }
     .reveal .slide-number { background: rgba(19,24,38,0.7); color: var(--muted); font-size: 16px; }
+
+    /* Keyboard focus indicators (QA M2 + I1 — WCAG 2.4.7 Focus Visible).
+       reveal.js paints no visible ring on its nav controls or the slide-number
+       link, so keyboard users cannot see focus. Add a brand-cyan ring that only
+       appears on keyboard focus (:focus-visible) — pointer interaction stays
+       visually unchanged. Purely additive to the inline theme; no reveal config
+       change and no effect on the default rendered state. */
+    .reveal .controls button:focus-visible {
+      outline: 2px solid var(--brand-cyan);
+      outline-offset: 2px;
+      border-radius: 6px;
+    }
+    .reveal .slide-number a:focus-visible {
+      outline: 2px solid var(--brand-cyan);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* QA I5 — WCAG 2.5.5 Target Size. reveal.js nav controls default to ~36x36;
+       enlarge the pointer/touch hit target to the 44x44 minimum. reveal centers
+       the arrow glyph within the button, so it stays centered at the larger size.
+       Additive; no reveal-config change and the M2 focus ring still applies. */
+    .reveal .controls button {
+      width: 44px;
+      height: 44px;
+    }
+
+    /* QA I4 — forced-colors (Windows High Contrast) fallback. Gradient text uses
+       background-clip:text with a transparent fill, which can render invisible when
+       the OS forces its own palette. In forced-colors mode, drop the gradient clip
+       and paint the text with the system foreground (CanvasText) so gradient
+       headings, numerals, and the wordmark stay legible. Normal rendering is
+       unchanged — this rule only activates under forced colors. */
+    @media (forced-colors: active) {
+      .wordmark, .grad-text {
+        background: none;
+        -webkit-text-fill-color: CanvasText;
+        color: CanvasText;
+        forced-color-adjust: auto;
+      }
+    }
+
+    /* QA I6 — honor prefers-reduced-motion. The reveal config transition stays
+       'slide' (Rule 3); when the OS requests reduced motion the browser applies
+       this override, collapsing the slide-change transform animation to near-zero
+       so vestibular-sensitive users are not exposed to large sliding motion.
+       No @keyframes exist in this deck, so this only tames reveal's transitions. */
+    @media (prefers-reduced-motion: reduce) {
+      .reveal.slide .slides > section,
+      .reveal.slide .slides > section > section,
+      .reveal .slides section,
+      .reveal .slides section * {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -392,7 +456,7 @@ graph LR
         <div class="tile-grid cols-4">
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="blocks"></i></span><h3>Feature completion</h3></div><p>Graph capture, peer access, and performance counters — delivered where the record-and-replay model permits.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="gauge"></i></span><h3>Benchmarking</h3></div><p>A Google Benchmark harness with a CI regression gate.</p></div>
-          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="shield-check"></i></span><h3>Coverage gate</h3></div><p>An 80% line-coverage threshold on the core and API layers <em>(gate deferred)</em>.</p></div>
+          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="shield-check"></i></span><h3>Coverage gate</h3></div><p>An 80% line-coverage threshold on the core and API layers <em>(active — passing at 85.38%)</em>.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="book-open"></i></span><h3>Docs &amp; examples</h3></div><p>A documentation tree plus runnable examples.</p></div>
         </div>
         <div class="footer"><span>Haze · libhaze</span><span class="fbrand wordmark">Blitzy</span></div>
@@ -409,7 +473,7 @@ graph LR
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P1</span></span></td><td>Benchmarking</td><td>Google Benchmark + <span class="mono">make bench</span> + CI regression gate</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Peer access</td><td>simulator-only (physical multi-chip = human follow-up)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Performance counters</td><td>additive counters via the API (delivered)</td></tr>
-            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Coverage</td><td>80% line-coverage gate on <span class="mono">src/core/</span> + <span class="mono">src/api/</span> (deferred)</td></tr>
+            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Coverage</td><td>80% line-coverage gate on <span class="mono">src/core/</span> + <span class="mono">src/api/</span> (active — 85.38%)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Tests</td><td>backfill + nine hardening categories under sanitizers (delivered)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P3</span></span></td><td>Docs &amp; examples</td><td><span class="mono">docs/</span> tree + runnable <span class="mono">examples/</span></td></tr>
           </tbody>
@@ -531,20 +595,21 @@ graph LR
       <!-- Slide 10: P2c Coverage and the 80% gate -->
       <section>
         <p class="eyebrow"><span class="accent">Priority 2</span> · Coverage</p>
-        <h2 class="slide-title">An 80% line-coverage gate — deferred, sequenced sensibly</h2>
+        <h2 class="slide-title">An 80% line-coverage gate — delivered, sequenced sensibly</h2>
         <div class="split">
           <div>
             <p class="lead">Clang source-based coverage (<span class="mono">llvm-profdata</span> + <span class="mono">llvm-cov</span>) — already in the toolchain, <strong>no new runtime dependency</strong>.</p>
-            <div style="margin:6px 0 10px;"><span class="badge warn"><i data-lucide="flag"></i>Deferred — measurement scripted; target, option, and CI gate not yet wired</span></div>
+            <div style="margin:6px 0 10px;"><span class="badge ok"><i data-lucide="circle-check"></i>Delivered — <span class="mono">HAZE_COVERAGE</span> option, <span class="mono">make coverage</span> target, and CI gate all wired; passing at 85.38%</span></div>
             <ul class="clean">
               <li>Scoped to <span class="mono">src/core/</span> + <span class="mono">src/api/</span>.</li>
-              <li>A CI gate will enforce <strong>80% line coverage</strong> <strong>(deferred — not yet wired)</strong>.</li>
-              <li>The coverage driver is scripted (<span class="mono">scripts/coverage.sh</span>); the <span class="mono">make coverage</span> target, <span class="mono">HAZE_COVERAGE</span> option, and CI gate are deferred.</li>
+              <li>A CI gate enforces <strong>80% line coverage</strong> <strong>(active — passing at 85.38%)</strong>.</li>
+              <li>The coverage driver (<span class="mono">scripts/coverage.sh</span>), the <span class="mono">make coverage</span> target, the <span class="mono">HAZE_COVERAGE</span> option, and the CI gate are all wired and live.</li>
               <li>Sequenced <strong>after</strong> backfill and hardening raise coverage — so it never gates the branch red before coverage exists.</li>
             </ul>
           </div>
           <div class="chart-wrap" style="display:flex;flex-direction:column;align-items:center;">
-            <svg class="svg-chart" viewBox="0 0 300 300" width="300" height="300" role="img" aria-label="80 percent coverage target gauge">
+            <!-- Cap the square gauge at its natural 300px: the shared .svg-chart{width:100%} rule (built for wide charts) would otherwise stretch this 1:1 gauge to the full column width (~800px), inflating the card past the footer band (QA M1 sibling-collision). Fixed size keeps the card clear of the global footer, consistent with every other content slide. -->
+            <svg class="svg-chart" viewBox="0 0 300 300" width="300" height="300" role="img" aria-label="80 percent coverage target gauge" style="width:300px;max-width:100%;height:auto;">
               <defs>
                 <linearGradient id="gaugeGrad" x1="0" y1="0" x2="1" y2="1">
                   <stop offset="0%" stop-color="#6D5EF6"/>
@@ -680,7 +745,7 @@ graph LR
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-branch"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Record-and-replay intact</h3><p><span class="mono">hazeFlush</span> remains the sole materialization trigger.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="circle-check"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Three no-ops unchanged</h3><p>Smoke-tested, not reimplemented.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="box"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>OpenFHE confined</h3><p>Stays within the replay bridge boundary.</p></div>
-          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-merge"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Existing CI untouched</h3><p>Seven existing workflows untouched; one advisory benchmark job added; coverage and sanitizer jobs deferred.</p></div>
+          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-merge"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Existing CI untouched</h3><p>Seven pre-existing workflows untouched; three jobs added — benchmark (advisory), coverage (80% gate), and sanitizers.</p></div>
         </div>
         <div class="footer"><span>Haze · libhaze</span><span class="fbrand wordmark">Blitzy</span></div>
       </section>
@@ -693,7 +758,7 @@ graph LR
           <div class="track"></div>
           <div class="nodes">
             <div class="node"><span class="dot"><i data-lucide="git-graph"></i></span><span class="step"><b>Graph-capture foundation</b>epoch snapshot + core module</span></div>
-            <div class="node"><span class="dot"><i data-lucide="gauge"></i></span><span class="step"><b>Measurement infra</b>benchmarks · coverage deferred</span></div>
+            <div class="node"><span class="dot"><i data-lucide="gauge"></i></span><span class="step"><b>Measurement infra</b>benchmarks + coverage gate</span></div>
             <div class="node"><span class="dot"><i data-lucide="layers"></i></span><span class="step"><b>Remaining features</b>peer access + counters</span></div>
             <div class="node"><span class="dot"><i data-lucide="microscope"></i></span><span class="step"><b>Raise coverage</b>backfill + hardening</span></div>
             <div class="node"><span class="dot"><i data-lucide="shield-check"></i></span><span class="step"><b>Enable 80% gate</b>after coverage exists</span></div>
@@ -712,7 +777,7 @@ graph LR
         <div class="brand-wrap">
           <div class="hero-band">
             <div class="lockup"><span class="icon-chip lg"><i data-lucide="zap"></i></span></div>
-            <h2 style="font-size:48px;margin:20px 0 12px;max-width:1300px;">A CUDA-shaped FHE runtime — benchmarked and documented, with its public ABI intact; coverage-gating deferred.</h2>
+            <h2 style="font-size:48px;margin:20px 0 12px;max-width:1300px;">A CUDA-shaped FHE runtime — benchmarked and documented, with its public ABI intact and an active 80% coverage gate.</h2>
             <div class="hero-rule"></div>
             <p class="lead muted" style="margin-top:20px;">Three user-rule deliverables in place: the decision log (Explainability), observability design with structured logging (Observability), and this deck (Executive Presentation).</p>
           </div>
@@ -810,6 +875,44 @@ graph LR
         flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true }
       });
 
+      // Harden a Mermaid sandbox render result before it enters the live DOM.
+      // Works on the returned markup inside an inert <template> (whose <iframe>
+      // does not load), so the injected frame loads exactly once already-corrected.
+      // Rationale: decision log D-42.
+      const hardenSandboxDiagram = (svg, label) => {
+        const tpl = document.createElement('template');
+        tpl.innerHTML = String(svg).trim();
+        const frame = tpl.content.querySelector('iframe');
+        if (!frame) return svg; // non-sandbox output (bare <svg>): leave unchanged
+        // Keep the off-slide diagram out of the keyboard tab order (Issue #3).
+        frame.setAttribute('tabindex', '-1');
+        // Give the frame an accessible name and drop the unused "iframe not
+        // supported" fallback text so it is not read by the slide announcement (Info #3).
+        if (label) frame.setAttribute('title', label);
+        frame.textContent = '';
+        // Ensure the sandboxed document declares a DOCTYPE (standards mode, not
+        // quirks). Best-effort: on any failure the original src is left intact (Info #1).
+        try {
+          const src = frame.getAttribute('src') || '';
+          const marker = ';base64,';
+          const at = src.indexOf(marker);
+          if (at !== -1 && /^data:text\/html/i.test(src)) {
+            const b64 = src.slice(at + marker.length);
+            const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+            const html = new TextDecoder('utf-8').decode(bytes);
+            if (!/^\s*<!doctype/i.test(html)) {
+              const outBytes = new TextEncoder().encode('<!DOCTYPE html>' + html);
+              let bin = '';
+              for (let k = 0; k < outBytes.length; k++) bin += String.fromCharCode(outBytes[k]);
+              frame.setAttribute('src', src.slice(0, at + marker.length) + btoa(bin));
+            }
+          }
+        } catch (e) {
+          /* leave src unchanged; diagram still renders */
+        }
+        return frame.outerHTML;
+      };
+
       // Render each diagram and inject the result. In sandbox mode mermaid.render()
       // returns a self-isolating <iframe> (sandbox, no allow-scripts) rather than a
       // bare <svg>, so the injected markup cannot execute script in the deck context.
@@ -822,16 +925,37 @@ graph LR
         if (UNSAFE_DEF.test(def)) {
           console.error('Mermaid definition rejected (interactive/script directive) for diagram', i);
           nodes[i].innerHTML = '<div class="mermaid-fallback">Diagram unavailable</div>';
+          // QA I2: decorative container stays out of the a11y tree here too.
+          nodes[i].setAttribute('aria-hidden', 'true');
           nodes[i].setAttribute('data-processed', 'true');
           continue;
         }
         try {
           const { svg } = await mermaid.render('mmd-' + i, def);
-          nodes[i].innerHTML = svg;
+          // Harden the sandboxed <iframe> before injection (tab order, accessible
+          // name, DOCTYPE). Rationale: decision log D-42. Doing this on the inert
+          // <template> means the frame enters the live DOM already carrying
+          // tabindex=-1 (WCAG 2.4.3/2.4.7), so it is never momentarily in the tab
+          // order, and its "iframe tag is not supported" fallback text is cleared.
+          const section = nodes[i].closest('section');
+          const heading = section ? section.querySelector('h2') : null;
+          const label = heading ? 'Diagram: ' + heading.textContent.trim() : 'Presentation diagram';
+          nodes[i].innerHTML = hardenSandboxDiagram(svg, label);
+          // QA I2: diagrams are decorative (each is mirrored by adjacent slide
+          // text), so hide the container from assistive tech. This also stops the
+          // sandbox iframe's fallback string from leaking into reveal.js's polite
+          // live region (getStatusText skips aria-hidden subtrees). Visual
+          // rendering is unaffected. Note: focusable frames inside an aria-hidden
+          // subtree are still keyboard-reachable, so tabindex=-1 (applied by
+          // hardenSandboxDiagram) remains required alongside this.
+          nodes[i].setAttribute('aria-hidden', 'true');
           nodes[i].setAttribute('data-processed', 'true');
         } catch (e) {
           console.error('Mermaid render failed for diagram', i, e);
           nodes[i].innerHTML = '<div class="mermaid-fallback">Diagram unavailable</div>';
+          // QA I2: keep the decorative container out of the a11y tree in the
+          // per-diagram failure path too, so the fallback caption never leaks.
+          nodes[i].setAttribute('aria-hidden', 'true');
           nodes[i].setAttribute('data-processed', 'true');
         }
       }
@@ -840,6 +964,9 @@ graph LR
       console.error('Mermaid module load failed; using diagram fallbacks', e);
       for (const node of nodes) {
         node.innerHTML = '<div class="mermaid-fallback">Diagram unavailable offline</div>';
+        // QA I2: decorative container stays out of the a11y tree in the
+        // module-load-failure path so the offline caption never leaks either.
+        node.setAttribute('aria-hidden', 'true');
         node.setAttribute('data-processed', 'true');
       }
     }

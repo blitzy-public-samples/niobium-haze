@@ -509,12 +509,12 @@ C ABI.
 
 ```sh
 git submodule update --init --recursive   # or: make sync
-make build MODE=release                   # Release into build/ (the default)
-make build MODE=debug                     # Debug   into dbuild/
+make build MODE=release                   # Release into build/
+make build MODE=debug                     # Debug   into dbuild/ (the default)
 ```
 
-`MODE` defaults to `release`, so a bare `make build` is equivalent to
-`make build MODE=release`. The same `MODE=` selector applies to every target
+`MODE` defaults to `debug`, so a bare `make build` is equivalent to
+`make build MODE=debug`. The same `MODE=` selector applies to every target
 that produces or consumes build artefacts (`config`, `build`, `test`,
 `test-unit`, `test-sim`, `test-transport`, `test-all`, `clean`).
 
@@ -589,7 +589,7 @@ Make variables and / or environment:
 
 | Variable                  | Purpose                                                                                                     | Default                                   |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `MODE`                    | `debug` or `release`. Selects `dbuild`/`build` and CMake `Debug`/`Release`.                                 | `release`                                 |
+| `MODE`                    | `debug` or `release`. Selects `dbuild`/`build` and CMake `Debug`/`Release`.                                 | `debug`                                   |
 | `NUM_CPUS`                | Build parallelism.                                                                                          | Auto (`sysctl -n hw.ncpu` / `nproc`).     |
 | `NIOBIUM_HAZE_FHETCH_DIR` | External `niobium-fhetch` source tree to use instead of `vendor/niobium-fhetch`.                            | unset (vendor submodule).                 |
 | `OPENFHE_INSTALL_DIR`     | Where OpenFHE is installed (libs + headers).                                                                | `<fhetch>/vendor/lib/openfhe`.            |
@@ -780,29 +780,30 @@ tune the ops or the record/replay path.
 
 ## Coverage
 
-> **Status: deferred.** The coverage *driver script* is present, but the
-> `make coverage` target, the `HAZE_COVERAGE` CMake option, and the CI coverage
-> gate are **not yet wired** in this tree. The commands in this section are the
-> planned surface and do not run today (`make coverage` currently fails); they
-> are documented here so the design is reviewable, and will be published as live
-> only once the target, option, and workflow are implemented and verified. The
-> rationale for sequencing the gate after the backfill/hardening work is recorded
-> in [`docs/decision-log.md`](docs/decision-log.md) (D-06, D-10).
+> **Status: delivered.** The `HAZE_COVERAGE` CMake option, the `make coverage`
+> target, the coverage driver [`scripts/coverage.sh`](scripts/coverage.sh), and
+> the [`.github/workflows/coverage.yml`](.github/workflows/coverage.yml) CI gate
+> are all wired in this tree. `make coverage` builds the instrumented tree, runs
+> the suite, and enforces the **80% line-coverage threshold** on
+> [`src/core/`](src/core/) and [`src/api/`](src/api/) — currently passing at
+> **85.38%**. The rationale for sequencing the gate after the backfill/hardening
+> work is recorded in [`docs/decision-log.md`](docs/decision-log.md) (D-06, D-10).
 
-The intended flow measures line coverage with Clang's source-based
-instrumentation. The coverage driver [`scripts/coverage.sh`](scripts/coverage.sh)
-is already in the tree: it runs the instrumented test binary, merges the raw
-profiles with `llvm-profdata merge`, and exports an lcov report with
-`llvm-cov export -format=lcov`, scoped to the runtime sources under
-[`src/core/`](src/core/) and [`src/api/`](src/api/).
+Coverage uses Clang's source-based instrumentation. The `-DHAZE_COVERAGE=ON`
+build option adds `-fprofile-instr-generate -fcoverage-mapping` (Clang only);
+the coverage driver [`scripts/coverage.sh`](scripts/coverage.sh) runs the
+instrumented test binary, merges the raw profiles with `llvm-profdata merge`,
+and exports an lcov report with `llvm-cov export -format=lcov`, scoped to the
+runtime sources under [`src/core/`](src/core/) and [`src/api/`](src/api/).
 
-The remaining pieces — a `-DHAZE_COVERAGE=ON` build option that adds
-`-fprofile-instr-generate -fcoverage-mapping`, a `make coverage` convenience
-target, and a `.github/workflows/coverage.yml` job enforcing an **80%
-line-coverage threshold** over those two trees — are planned but not present.
-The threshold gate is intentionally sequenced *after* the backfill and
-error-path hardening work so that enabling it will not turn the branch red
-retroactively.
+```sh
+make coverage       # builds instrumented, runs the suite, enforces the 80% gate
+```
+
+The [`.github/workflows/coverage.yml`](.github/workflows/coverage.yml) job runs
+the same flow per PR and fails below the threshold. The gate is intentionally
+sequenced *after* the backfill and error-path hardening work so that enabling it
+did not turn the branch red retroactively.
 
 ## Observability
 

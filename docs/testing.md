@@ -1,9 +1,9 @@
 # Testing
 
 Haze ships one Catch2 v3 test binary, `haze_tests`, that holds every unit and
-integration case (roughly 160 `TEST_CASE`s across 15 unit translation units
-plus the `test/e2e/` OpenFHE-pipeline suite). The suites are not separate
-executables: they are the *same* binary sliced by Catch2 tag and by
+integration case (roughly 390 `TEST_CASE`s across 31 unit and integration
+translation units plus the `test/e2e/` OpenFHE-pipeline suite). The suites are
+not separate executables: they are the *same* binary sliced by Catch2 tag and by
 environment (`HAZE_TARGET`, plus the optional transport setup). A second,
 opt-in binary, `haze_e2e_tests`, is a black-box executable that links the
 *shipped* `libhaze.so` through the public `haze*` C ABI only (no `src/`, no
@@ -126,24 +126,22 @@ clean under both `HAZE_SANITIZERS` and `HAZE_TSAN`.
 
 ## Code coverage
 
-> **Status: deferred.** The coverage *driver script*
-> [`../scripts/coverage.sh`](../scripts/coverage.sh) is present, but the
-> `HAZE_COVERAGE` CMake option, the `make coverage` target, and the coverage CI
-> gate are **not yet wired** (`make coverage` currently fails, and
-> `-DHAZE_COVERAGE=ON` is not a recognised option). The workflow below is the
-> planned design; it is documented so the approach is reviewable and will be
-> published as live only once the option, target, and workflow are implemented
-> and verified.
+> **Status: delivered.** The `HAZE_COVERAGE` CMake option, the `make coverage`
+> target, the coverage driver [`../scripts/coverage.sh`](../scripts/coverage.sh),
+> and the coverage CI gate are all wired. `make coverage` builds instrumented,
+> runs the suite, and enforces the 80% line-coverage threshold on `src/core/` and
+> `src/api/` — currently passing at **85.38%**. The workflow below is the live
+> design.
 
-The intended design uses Clang source-based instrumentation, gated behind a
-`HAZE_COVERAGE` CMake option. A `make coverage` target would configure, build,
-run the suite, and produce the report in one step:
+Coverage uses Clang source-based instrumentation, gated behind the
+`HAZE_COVERAGE` CMake option. The `make coverage` target configures, builds,
+runs the suite, and produces the report in one step:
 
 ```sh
-make coverage        # planned; not yet available
+make coverage        # builds instrumented, runs the suite, enforces the 80% gate
 ```
 
-Driven manually, the option would be configured into a dedicated tree, then
+Driven manually, the option is configured into a dedicated tree, then
 `scripts/coverage.sh` run against it:
 
 ```sh
@@ -152,7 +150,7 @@ cmake --build build-coverage -j
 scripts/coverage.sh
 ```
 
-`HAZE_COVERAGE` would compile the tree with `-fprofile-instr-generate
+`HAZE_COVERAGE` compiles the tree with `-fprofile-instr-generate
 -fcoverage-mapping`. Running the instrumented `haze_tests` emits one or more
 `*.profraw` files, which `scripts/coverage.sh` merges and exports as lcov,
 scoped to the two trees the threshold applies to:
@@ -163,10 +161,11 @@ llvm-cov export -format=lcov -instr-profile=haze.profdata \
     ./build-coverage/haze_tests src/core src/api > coverage.lcov
 ```
 
-Once wired, a coverage CI job would enforce an **80% line-coverage threshold**
-on `src/core/` and `src/api/`, failing the job below it. The gate is
-intentionally sequenced to be enabled only after the backfill and hardening
-tests raised coverage to clear it, so turning it on does not retroactively redden
+The [`../.github/workflows/coverage.yml`](../.github/workflows/coverage.yml)
+coverage CI job enforces an **80% line-coverage threshold** on `src/core/` and
+`src/api/`, failing the job below it (currently passing at **85.38%**). The gate
+is intentionally sequenced to be enabled only after the backfill and hardening
+tests raised coverage to clear it, so turning it on did not retroactively redden
 the branch. An HTML report is optional via `lcov`'s `genhtml`:
 
 ```sh
@@ -243,21 +242,20 @@ not-supported paths — and are exercised under the sanitizers:
 
 ## Continuous integration
 
-The seven existing workflows in `.github/workflows/` — `build-matrix.yml`,
+The seven pre-existing workflows in `.github/workflows/` — `build-matrix.yml`,
 `build-test.yml`, `clang-format.yml`, `flake-check.yml`, `openfhe-bump.yml`,
 `pr-claude-code-review.yml`, and `scanoss.yml` — remain green and unchanged.
-This initiative adds one new job alongside them, and two more are planned:
+This initiative adds three new jobs alongside them, for ten workflows total:
 
 - `.github/workflows/benchmark.yml` — **live.** Runs the benchmark suite and
   flags regressions against the checked-in baseline.
-- `.github/workflows/coverage.yml` — **deferred (not yet in the tree).** Would
-  build instrumented, produce the coverage report, and enforce the 80%
-  line-coverage gate on `src/core/` and `src/api/`, once the `HAZE_COVERAGE`
-  option and `make coverage` target are wired (see the coverage note above).
-- `.github/workflows/sanitizers.yml` — **deferred (not yet in the tree).** Would
-  run ASan/UBSan and TSan over the hardening tests. The `HAZE_SANITIZERS` and
-  `HAZE_TSAN` build options already exist and can be exercised locally in the
-  meantime.
+- `.github/workflows/coverage.yml` — **live.** Builds instrumented, produces the
+  coverage report, and enforces the 80% line-coverage gate on `src/core/` and
+  `src/api/` via the `HAZE_COVERAGE` option and the `make coverage` target
+  (currently passing at 85.38% — see the coverage note above).
+- `.github/workflows/sanitizers.yml` — **live.** Runs ASan/UBSan and TSan over
+  the hardening tests. The `HAZE_SANITIZERS` and `HAZE_TSAN` build options are
+  exercised by this job and can also be run locally.
 
 ## See also
 

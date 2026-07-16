@@ -312,11 +312,16 @@ void BM_HazeAutomorphMrp(benchmark::State &state) {
 
 } // namespace
 
-BENCHMARK(BM_HazeAdd)->Iterations(1000);
-BENCHMARK(BM_HazeAddMrp)->Iterations(1000);
-BENCHMARK(BM_HazeMul)->Iterations(1000);
-BENCHMARK(BM_HazeMulMrp)->Iterations(1000);
-BENCHMARK(BM_HazeNTT)->Iterations(1000);
-BENCHMARK(BM_HazeNTTMrp)->Iterations(1000);
-BENCHMARK(BM_HazeAutomorph)->Iterations(1000);
-BENCHMARK(BM_HazeAutomorphMrp)->Iterations(1000);
+// Each compute benchmark runs 5 repetitions; the regression gate compares the
+// median across a benchmark's iteration rows, which suppresses the per-run
+// variance observed on shared CI runners. Rationale: docs/decision-log.md
+// (D-43). The record->flush->replay benchmarks stay single-shot (they are
+// already low-variance) and are registered in bench_record_replay.cpp.
+BENCHMARK(BM_HazeAdd)->Iterations(1000)->Repetitions(5);
+BENCHMARK(BM_HazeAddMrp)->Iterations(1000)->Repetitions(5);
+BENCHMARK(BM_HazeMul)->Iterations(1000)->Repetitions(5);
+BENCHMARK(BM_HazeMulMrp)->Iterations(1000)->Repetitions(5);
+BENCHMARK(BM_HazeNTT)->Iterations(1000)->Repetitions(5);
+BENCHMARK(BM_HazeNTTMrp)->Iterations(1000)->Repetitions(5);
+BENCHMARK(BM_HazeAutomorph)->Iterations(1000)->Repetitions(5);
+BENCHMARK(BM_HazeAutomorphMrp)->Iterations(1000)->Repetitions(5);

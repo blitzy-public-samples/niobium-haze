@@ -67,7 +67,7 @@ prerequisites installed by your system package manager:
 
 ```sh
 make sync                    # init vendor/niobium-fhetch + vendor/openfhe submodules
-make build MODE=release      # Release into build/ (the default); MODE=debug builds into dbuild/
+make build MODE=debug        # Debug into dbuild/ (the default); MODE=release builds into build/
 make test                    # default suites (see "Building & testing")
 ```
 
@@ -90,8 +90,10 @@ an opt-in convenience; the Makefile flow remains the primary path.
 ## Building & testing
 
 All build and test entry points are Makefile targets. `MODE` selects the build
-directory and CMake configuration and defaults to `release`; pass `MODE=debug`
-to build into `dbuild/` instead.
+directory and CMake configuration and defaults to `debug` (building into
+`dbuild/`); pass `MODE=release` to build into `build/` instead. CI and the
+`make bench`/`make coverage` flows pin `MODE=release` explicitly, so the
+default is never exercised in the merge gates.
 
 | Target | What it does |
 | --- | --- |
@@ -105,13 +107,16 @@ to build into `dbuild/` instead.
 | `make test-isolation` | Assert `libhaze` exports only the `haze*` C ABI (the symbol-leak check). |
 | `make test-all` | `make test` plus `test-readme` and the opt-in `test-transport`. |
 | `make bench` | Build and run the Google Benchmark suite for the FHE ops and the record→flush→replay path. |
+| `make coverage` | Build instrumented, run the suite, and enforce the 80% line-coverage gate on `src/core/` and `src/api/` (Clang source-based coverage). |
 
-> **Deferred:** a `make coverage` target (and its `HAZE_COVERAGE` build option) is
-> planned but **not yet wired** in this tree — invoking it currently fails. The
-> coverage *driver* [`scripts/coverage.sh`](scripts/coverage.sh) is present; the
-> target, option, and CI gate will be added and documented as live only once
-> implemented and verified. See [`docs/decision-log.md`](docs/decision-log.md)
-> (D-06, D-10).
+> **Coverage:** `make coverage` (and its `HAZE_COVERAGE` build option) is wired in
+> this tree: it builds the instrumented tree, runs the suite, and enforces the 80%
+> line-coverage gate via the coverage driver
+> [`scripts/coverage.sh`](scripts/coverage.sh) — currently passing at **85.38%**.
+> A [`.github/workflows/coverage.yml`](.github/workflows/coverage.yml) CI job runs
+> the same gate per PR. The rationale for sequencing the gate after the
+> backfill/hardening work is recorded in
+> [`docs/decision-log.md`](docs/decision-log.md) (D-06, D-10).
 
 Two of these targets guard project-wide invariants and must stay green:
 
@@ -189,13 +194,14 @@ not be accepted:
   priority tier). Each PR should be self-contained and easy to review.
 - **Include tests** — Every PR carries Catch2 tests for the behavior it changes
   or adds, and updates the relevant README/`docs/` content.
-- **Keep CI green** — All existing CI workflows (`build-matrix`, `build-test`,
-  `clang-format`, `flake-check`, `openfhe-bump`, `PR - Claude Code Review`,
-  `SCANOSS License Compliance`) plus the `benchmark` job must pass. Dedicated
-  `coverage` and `sanitizers` workflows are **deferred** (not yet in the tree);
-  the `HAZE_SANITIZERS`/`HAZE_TSAN` build options exist and can be exercised
-  locally in the meantime. Run `make test`, `scripts/clang-format.sh --check`,
-  and `scripts/clang-tidy.sh` locally first.
+- **Keep CI green** — All ten CI workflows must pass: the seven pre-existing
+  (`build-matrix`, `build-test`, `clang-format`, `flake-check`, `openfhe-bump`,
+  `PR - Claude Code Review`, `SCANOSS License Compliance`) plus the three added
+  by this initiative — `benchmark`, `coverage` (the 80% line-coverage gate,
+  currently passing at 85.38%), and `sanitizers` (ASan/UBSan + TSan; the
+  `HAZE_SANITIZERS`/`HAZE_TSAN` build options can also be exercised locally).
+  Run `make test`, `scripts/clang-format.sh --check`, and `scripts/clang-tidy.sh`
+  locally first.
 - **Describe the change** — Provide a short description of what was implemented
   and an explicit list of any human follow-up (for example, physical multi-chip
   hardware validation for peer access).

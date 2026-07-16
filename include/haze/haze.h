@@ -411,6 +411,11 @@ HAZE_API hazeError_t hazeModUp(void *const *dst, const void *const *src, const v
 // compute call. A corrupt or partial on-disk artifact is always reported as a
 // representable error (HAZE_ERROR_INTERNAL) and never as a C++ exception
 // crossing the C ABI. Single-process use requires no directory override.
+// Reading replayed values back after a flush is a separate concern and needs
+// no such coordination: the integer components are read directly from the
+// polynomial's in-memory representation, with no temporary scratch file or
+// serialization round-trip, so extraction holds no shared filesystem state
+// and never collides across concurrent processes.
 
 HAZE_API hazeError_t hazeStreamBeginCapture(hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeStreamEndCapture(hazeStream_t stream, hazeGraph_t *graph) HAZE_NOEXCEPT;

@@ -15,12 +15,11 @@
 
 #include <benchmark/benchmark.h>
 #include <cstdint>
-#include <cstdio> // IWYU pragma: keep
 #include <cstdlib>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
-#include <print>
+#include <string>
 #include <vector>
 
 namespace {
@@ -36,48 +35,56 @@ constexpr int kModIdx = 0;
 
 constexpr std::size_t kMrpResidues = 3;
 
-// Abort the process if a haze call did not return HAZE_SUCCESS.
-void require_ok(hazeError_t rc) {
+// Report a benchmark error (rather than aborting the whole process) when a
+// haze call did not return HAZE_SUCCESS. Returning false lets the caller stop
+// the benchmark cleanly: Google Benchmark records it as errored, the
+// --benchmark_out JSON stays valid, and the process exits normally — instead
+// of a std::abort() that core-dumps and truncates the results file. The
+// regression gate (scripts/bench_compare.py) then correctly treats an
+// errored/skipped benchmark as a gate failure.
+[[nodiscard]] bool check_ok(benchmark::State &state, hazeError_t rc) {
     if (rc != HAZE_SUCCESS) {
-        std::println(stderr, "haze call failed with error {}", static_cast<int>(rc));
-        std::abort();
+        state.SkipWithError("haze call failed with error " + std::to_string(static_cast<int>(rc)));
+        return false;
     }
+    return true;
 }
 
 // Apply the HAZE_TARGET selector via the explicit setter after a device reset,
-// before the first configure/record.
-void apply_target_from_env() {
+// before the first configure/record. Reports the error on `state` and returns
+// false if the setter fails.
+[[nodiscard]] bool apply_target_from_env(benchmark::State &state) {
     if (const char *t = std::getenv("HAZE_TARGET"); t != nullptr && t[0] != '\0') {
-        require_ok(hazeSetTarget(t));
+        return check_ok(state, hazeSetTarget(t));
     }
+    return true;
 }
 
 // Single-residue setup: reset, ring dimension, bridge CryptoContext init, one
-// ciphertext modulus, configure device.
-void setup_srp() {
-    require_ok(hazeDeviceReset());
-    apply_target_from_env();
-    require_ok(hazeSetReducedNoise(1));
-    require_ok(hazeSetRingDimension(kRingDim));
+// ciphertext modulus, configure device. Short-circuits on the first failure,
+// reporting it on `state`; returns true only when fully configured.
+[[nodiscard]] bool setup_srp(benchmark::State &state) {
     uint64_t scaffold = 0;
-    require_ok(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold));
-    require_ok(hazeSetCiphertextModulus(kModIdx, kQ0));
-    require_ok(hazeConfigureDevice());
+    return check_ok(state, hazeDeviceReset()) && apply_target_from_env(state) &&
+           check_ok(state, hazeSetReducedNoise(1)) &&
+           check_ok(state, hazeSetRingDimension(kRingDim)) &&
+           check_ok(state, hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold)) &&
+           check_ok(state, hazeSetCiphertextModulus(kModIdx, kQ0)) &&
+           check_ok(state, hazeConfigureDevice());
 }
 
 // Three-prime MRP setup: all three modulus slots set before the single
-// configure.
-void setup_mrp() {
-    require_ok(hazeDeviceReset());
-    apply_target_from_env();
-    require_ok(hazeSetReducedNoise(1));
-    require_ok(hazeSetRingDimension(kRingDim));
+// configure. Short-circuits on the first failure, reporting it on `state`.
+[[nodiscard]] bool setup_mrp(benchmark::State &state) {
     uint64_t scaffold = 0;
-    require_ok(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold));
-    require_ok(hazeSetCiphertextModulus(0, kQ0));
-    require_ok(hazeSetCiphertextModulus(1, kQ1));
-    require_ok(hazeSetCiphertextModulus(2, kQ2));
-    require_ok(hazeConfigureDevice());
+    return check_ok(state, hazeDeviceReset()) && apply_target_from_env(state) &&
+           check_ok(state, hazeSetReducedNoise(1)) &&
+           check_ok(state, hazeSetRingDimension(kRingDim)) &&
+           check_ok(state, hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold)) &&
+           check_ok(state, hazeSetCiphertextModulus(0, kQ0)) &&
+           check_ok(state, hazeSetCiphertextModulus(1, kQ1)) &&
+           check_ok(state, hazeSetCiphertextModulus(2, kQ2)) &&
+           check_ok(state, hazeConfigureDevice());
 }
 
 } // namespace
@@ -87,41 +94,49 @@ void setup_mrp() {
 // trigger; it replays the recorded epoch through the in-process simulator and
 // then resets the epoch, so each iteration re-records cleanly.
 void BM_RecordFlushReplaySrp(benchmark::State &state) {
-    setup_srp();
+    if (!setup_srp(state))
+        return;
     const std::size_t bytes = kRingDim * sizeof(uint64_t);
     const std::vector<uint64_t> host(kRingDim, 1);
 
     void *a = nullptr;
     void *b = nullptr;
     void *d = nullptr;
-    require_ok(hazeMalloc(&a, bytes));
-    require_ok(hazeMalloc(&b, bytes));
-    require_ok(hazeMalloc(&d, bytes));
-
-    for ([[maybe_unused]] auto _ : state) {
-        require_ok(hazeMemcpy(a, host.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE));
-        require_ok(hazeMemcpy(b, host.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE));
-        hazeError_t rc = hazeAdd(d, a, b, kModIdx, nullptr);
-        benchmark::DoNotOptimize(rc);
-        require_ok(rc);
-        require_ok(hazeTagOutput(d));
-        hazeError_t frc = hazeFlush();
-        benchmark::DoNotOptimize(frc);
-        require_ok(frc);
-        benchmark::ClobberMemory();
+    if (check_ok(state, hazeMalloc(&a, bytes)) && check_ok(state, hazeMalloc(&b, bytes)) &&
+        check_ok(state, hazeMalloc(&d, bytes))) {
+        for ([[maybe_unused]] auto _ : state) {
+            if (!check_ok(state, hazeMemcpy(a, host.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE)) ||
+                !check_ok(state, hazeMemcpy(b, host.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE)))
+                break;
+            hazeError_t rc = hazeAdd(d, a, b, kModIdx, nullptr);
+            benchmark::DoNotOptimize(rc);
+            if (!check_ok(state, rc))
+                break;
+            if (!check_ok(state, hazeTagOutput(d)))
+                break;
+            hazeError_t frc = hazeFlush();
+            benchmark::DoNotOptimize(frc);
+            if (!check_ok(state, frc))
+                break;
+            benchmark::ClobberMemory();
+        }
     }
 
-    require_ok(hazeFree(a));
-    require_ok(hazeFree(b));
-    require_ok(hazeFree(d));
-    require_ok(hazeDeviceReset());
+    // Best-effort teardown: a cleanup failure must neither abort the process nor
+    // overwrite a benchmark error already reported above. hazeFree/hazeDeviceReset
+    // are null-safe, so this is correct even if a malloc above failed.
+    (void)hazeFree(a);
+    (void)hazeFree(b);
+    (void)hazeFree(d);
+    (void)hazeDeviceReset();
 }
 
 // Three-residue (MRP) record->flush->replay cycle: stage two multi-residue
 // inputs, record one add over the base, tag one residue (which tags the whole
 // group), and flush. Flush self-bounds the epoch as in the single-residue case.
 void BM_RecordFlushReplayMrp(benchmark::State &state) {
-    setup_mrp();
+    if (!setup_mrp(state))
+        return;
     const uint64_t base[kMrpResidues] = {kQ0, kQ1, kQ2};
     const std::size_t bytes = kRingDim * sizeof(uint64_t);
     const std::vector<uint64_t> host(kRingDim, 1);
@@ -129,31 +144,37 @@ void BM_RecordFlushReplayMrp(benchmark::State &state) {
     void *a[kMrpResidues] = {};
     void *b[kMrpResidues] = {};
     void *d[kMrpResidues] = {};
-    require_ok(hazeMallocMrp(a, kMrpResidues, bytes));
-    require_ok(hazeMallocMrp(b, kMrpResidues, bytes));
-    require_ok(hazeMallocMrp(d, kMrpResidues, bytes));
+    if (check_ok(state, hazeMallocMrp(a, kMrpResidues, bytes)) &&
+        check_ok(state, hazeMallocMrp(b, kMrpResidues, bytes)) &&
+        check_ok(state, hazeMallocMrp(d, kMrpResidues, bytes))) {
+        const void *host_src[kMrpResidues] = {host.data(), host.data(), host.data()};
 
-    const void *host_src[kMrpResidues] = {host.data(), host.data(), host.data()};
-
-    for ([[maybe_unused]] auto _ : state) {
-        require_ok(
-            hazeMemcpyMrp(a, host_src, bytes, HAZE_MEMCPY_HOST_TO_DEVICE, base, kMrpResidues));
-        require_ok(
-            hazeMemcpyMrp(b, host_src, bytes, HAZE_MEMCPY_HOST_TO_DEVICE, base, kMrpResidues));
-        hazeError_t rc = hazeAddMrp(d, a, b, base, kMrpResidues, nullptr);
-        benchmark::DoNotOptimize(rc);
-        require_ok(rc);
-        require_ok(hazeTagOutput(d[0]));
-        hazeError_t frc = hazeFlush();
-        benchmark::DoNotOptimize(frc);
-        require_ok(frc);
-        benchmark::ClobberMemory();
+        for ([[maybe_unused]] auto _ : state) {
+            if (!check_ok(state, hazeMemcpyMrp(a, host_src, bytes, HAZE_MEMCPY_HOST_TO_DEVICE, base,
+                                               kMrpResidues)) ||
+                !check_ok(state, hazeMemcpyMrp(b, host_src, bytes, HAZE_MEMCPY_HOST_TO_DEVICE, base,
+                                               kMrpResidues)))
+                break;
+            hazeError_t rc = hazeAddMrp(d, a, b, base, kMrpResidues, nullptr);
+            benchmark::DoNotOptimize(rc);
+            if (!check_ok(state, rc))
+                break;
+            if (!check_ok(state, hazeTagOutput(d[0])))
+                break;
+            hazeError_t frc = hazeFlush();
+            benchmark::DoNotOptimize(frc);
+            if (!check_ok(state, frc))
+                break;
+            benchmark::ClobberMemory();
+        }
     }
 
-    require_ok(hazeFreeMrp(a, kMrpResidues));
-    require_ok(hazeFreeMrp(b, kMrpResidues));
-    require_ok(hazeFreeMrp(d, kMrpResidues));
-    require_ok(hazeDeviceReset());
+    // Best-effort teardown (see BM_RecordFlushReplaySrp). hazeFreeMrp tolerates
+    // null residue slots, so this is safe even if a malloc above failed.
+    (void)hazeFreeMrp(a, kMrpResidues);
+    (void)hazeFreeMrp(b, kMrpResidues);
+    (void)hazeFreeMrp(d, kMrpResidues);
+    (void)hazeDeviceReset();
 }
 
 BENCHMARK(BM_RecordFlushReplaySrp)->Iterations(100);

@@ -492,6 +492,7 @@ add_executable(haze_tests
   test/test_unflushed_reads.cpp
   test/test_config_errors.cpp
   test/test_allocator_limits.cpp
+  test/test_polynomial_io.cpp
   test/test_graph_capture.cpp
   test/test_peer_access.cpp
   test/test_performance_counters.cpp

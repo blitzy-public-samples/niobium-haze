@@ -72,86 +72,18 @@ jobs:
       - name: Build + run benchmarks (make bench, JSON out)
         run: nix develop --command make bench MODE=release
 
+      # Robust regression gate (scripts/bench_compare.py): reads iteration rows
+      # only, keys benchmarks by base name, compares the MEDIAN per benchmark,
+      # and FAILS on any missing/renamed benchmark, any errored/skipped run, an
+      # empty baseline, or a regression beyond the threshold. Pure stdlib, so it
+      # runs on the runner's system python3 (no devshell required).
       - name: Compare against baseline (flag regressions)
         env:
           CURRENT: build/benchmark_results.json
           BASELINE: benchmark/baseline.json
         run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import sys
-
-          threshold = float(os.environ.get("BENCH_REGRESSION_THRESHOLD", "0.50"))
-          current_path = os.environ["CURRENT"]
-          baseline_path = os.environ["BASELINE"]
-
-          def load(path):
-              with open(path) as fh:
-                  return json.load(fh)
-
-          def cpu_map(doc):
-              out = {}
-              for b in doc.get("benchmarks", []):
-                  if b.get("run_type") == "aggregate":
-                      continue
-                  name = b.get("name")
-                  val = b.get("cpu_time", b.get("real_time"))
-                  if name is not None and val is not None:
-                      out[name] = float(val)
-              return out
-
-          if not os.path.exists(current_path):
-              print("error: benchmark results not found: %s" % current_path)
-              print("       expected 'make bench' to emit build/benchmark_results.json")
-              sys.exit(1)
-
-          if not os.path.exists(baseline_path) or os.path.getsize(baseline_path) == 0:
-              print("::warning::baseline %s missing or empty; skipping regression gate "
-                    "(soft-pass until the baseline lands)" % baseline_path)
-              sys.exit(0)
-
-          current = cpu_map(load(current_path))
-          baseline = cpu_map(load(baseline_path))
-
-          if not baseline:
-              print("::warning::baseline %s has no benchmarks; soft-pass" % baseline_path)
-              sys.exit(0)
-
-          shared = sorted(set(current) & set(baseline))
-          only_current = sorted(set(current) - set(baseline))
-          only_baseline = sorted(set(baseline) - set(current))
-
-          regressed = []
-          print("%-48s %14s %14s %8s  %s" % ("benchmark", "baseline", "current", "ratio", "status"))
-          print("-" * 96)
-          for name in shared:
-              b = baseline[name]
-              c = current[name]
-              ratio = (c / b) if b else float("inf")
-              status = "OK"
-              if ratio > 1.0 + threshold:
-                  status = "REGRESSION"
-                  regressed.append((name, ratio))
-              print("%-48s %14.2f %14.2f %8.3f  %s" % (name, b, c, ratio, status))
-
-          for name in only_current:
-              print("::warning::benchmark only in current run (no baseline entry): %s" % name)
-          for name in only_baseline:
-              print("::warning::benchmark missing from current run: %s" % name)
-
-          if regressed:
-              print("")
-              print("error: %d benchmark(s) regressed beyond %.0f%% threshold:"
-                    % (len(regressed), threshold * 100))
-              for name, ratio in regressed:
-                  print("  %s: %.3fx baseline cpu_time" % (name, ratio))
-              sys.exit(1)
-
-          print("")
-          print("OK: no regressions beyond %.0f%% across %d shared benchmark(s)"
-                % (threshold * 100, len(shared)))
-          PY
+          python3 scripts/bench_compare.py "$BASELINE" "$CURRENT" \
+            --threshold "$BENCH_REGRESSION_THRESHOLD"
 
       - name: Upload benchmark results
         if: always()

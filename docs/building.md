@@ -34,12 +34,12 @@ sudo apt install cmake catch2 clang-19 llvm-19-dev
 
 ```sh
 git submodule update --init --recursive   # or: make sync
-make build MODE=release                    # Release into build/ (the default)
-make build MODE=debug                      # Debug   into dbuild/
+make build MODE=release                    # Release into build/
+make build MODE=debug                      # Debug   into dbuild/ (the default)
 ```
 
-`MODE` defaults to `release`, so a bare `make build` is equivalent to
-`make build MODE=release`. The same `MODE=` selector applies to every target
+`MODE` defaults to `debug`, so a bare `make build` is equivalent to
+`make build MODE=debug`. The same `MODE=` selector applies to every target
 that produces or consumes build artefacts (`config`, `build`, `test`,
 `test-unit`, `test-sim`, `test-transport`, `test-all`, `clean`).
 
@@ -100,18 +100,16 @@ byte-for-byte unaffected, so benchmarking never changes the library ABI. The run
 emits JSON that CI compares against the checked-in `benchmark/baseline.json` to
 flag regressions. This target is live today.
 
-> **Coverage is deferred.** A `make coverage` target and the `HAZE_COVERAGE`
-> CMake option are **not yet wired** in this tree (`make coverage` currently
-> fails and `make help` does not list it). The coverage *driver*
-> [`../scripts/coverage.sh`](../scripts/coverage.sh) is present, and the intended
-> flow is a `-DHAZE_COVERAGE=ON` Clang source-based instrumentation build
-> (`-fprofile-instr-generate -fcoverage-mapping`) that runs the tests, then drives
-> `scripts/coverage.sh` (`llvm-profdata merge` followed by
-> `llvm-cov export -format=lcov`) scoped to `src/core/` and `src/api/`, with a CI
-> gate requiring **80% line coverage** across those two trees. `llvm-cov` /
-> `llvm-profdata` already ship with clang, so no new dependency is needed once the
-> option, target, and workflow are implemented and verified. See
-> [`./testing.md`](./testing.md) for the intended coverage workflow and
+> **Coverage is delivered.** The `make coverage` target and the `HAZE_COVERAGE`
+> CMake option are wired in this tree (`make help` lists `make coverage`). It runs
+> a `-DHAZE_COVERAGE=ON` Clang source-based instrumentation build
+> (`-fprofile-instr-generate -fcoverage-mapping`), runs the tests, then drives the
+> coverage driver [`../scripts/coverage.sh`](../scripts/coverage.sh)
+> (`llvm-profdata merge` followed by `llvm-cov export -format=lcov`) scoped to
+> `src/core/` and `src/api/`, with a CI gate requiring **80% line coverage**
+> across those two trees — currently passing at **85.38%**. `llvm-cov` /
+> `llvm-profdata` already ship with clang, so no new dependency is needed. See
+> [`./testing.md`](./testing.md) for the coverage workflow and
 > [`./decision-log.md`](./decision-log.md) (D-06, D-10) for the sequencing
 > rationale.
 
@@ -121,7 +119,7 @@ Make variables and / or environment:
 
 | Variable                  | Purpose                                                                                                     | Default                                   |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `MODE`                    | `debug` or `release`. Selects `dbuild`/`build` and CMake `Debug`/`Release`.                                 | `release`                                 |
+| `MODE`                    | `debug` or `release`. Selects `dbuild`/`build` and CMake `Debug`/`Release`.                                 | `debug`                                   |
 | `NUM_CPUS`                | Build parallelism.                                                                                          | Auto (`sysctl -n hw.ncpu` / `nproc`).     |
 | `NIOBIUM_HAZE_FHETCH_DIR` | External `niobium-fhetch` source tree to use instead of `vendor/niobium-fhetch`.                            | unset (vendor submodule).                 |
 | `OPENFHE_INSTALL_DIR`     | Where OpenFHE is installed (libs + headers).                                                                | `<fhetch>/vendor/lib/openfhe`.            |
@@ -148,12 +146,12 @@ Passed to the configure step as `-D<name>=<value>`:
 | `HAZE_FBC_REDUCED_NOISE`                   | `ON`    | Test oracle uses OpenFHE's `ReducedNoise` FBC variant.               |
 | `NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS` | `OFF`   | Register `haze_transport_tests` as a ctest entry (parent-build use). |
 | `HAZE_BUILD_BENCHMARKS`                    | `OFF`   | Build the Google Benchmark suite as a separate executable (never absorbed into `libhaze`). |
-| `HAZE_COVERAGE` *(deferred)*               | —       | Planned Clang source-based coverage instrumentation (`-fprofile-instr-generate -fcoverage-mapping`, Clang only). **Not yet present** in `CMakeLists.txt`. |
+| `HAZE_COVERAGE`                            | `OFF`   | Clang source-based coverage instrumentation (`-fprofile-instr-generate -fcoverage-mapping`, Clang only). Set by `make coverage`. |
 
 `make bench` sets `HAZE_BUILD_BENCHMARKS`, so you rarely pass it by hand; it is
 listed here for direct `cmake` invocations and for parent build graphs. The
-`HAZE_COVERAGE` option (and the `make coverage` target that would set it) are
-deferred — see the coverage note above.
+`HAZE_COVERAGE` option is set by the `make coverage` target — see the coverage
+note above.
 
 ## As a `niobium-client` submodule
 
@@ -207,7 +205,7 @@ clang-tools, jujutsu, nixfmt) and, for this initiative, also `gbenchmark`
 (Google Benchmark) plus optional `lcov`/`genhtml`; `llvm-cov`/`llvm-profdata`
 already ship with clang. From inside the shell the Makefile flow (`make build`,
 `make test`, `make bench`, ...) works unchanged against the live worktree. (The
-`make coverage` target is deferred — see the coverage note above.)
+`make coverage` target works here too — see the coverage note above.)
 
 ```sh
 nix develop                          # interactive
@@ -252,8 +250,8 @@ nix flake check                      # devshell + fmt + haze build + tests
 
 ## See also
 
-- [`./testing.md`](./testing.md) — running the suites, sanitizers, the live
-  benchmark workflow, and the deferred coverage workflow.
+- [`./testing.md`](./testing.md) — running the suites, sanitizers, and the live
+  benchmark and coverage workflows.
 - [`./architecture.md`](./architecture.md) — the layering the build produces.
 - [`./index.md`](./index.md) — documentation landing page.
 - [`./decision-log.md`](./decision-log.md) — rationale for build-tooling
