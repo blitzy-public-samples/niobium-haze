@@ -269,6 +269,80 @@ TEST_CASE("error path: freeing a host pointer with the device free is rejected",
 }
 
 // ---------------------------------------------------------------------------
+// Invalid / double free of host and handle deallocation paths. Each of these
+// paths validates the pointer/handle against its live registry before freeing,
+// so a foreign or already-freed argument returns a documented error instead of
+// aborting (glibc invalid/double free) or crossing the noexcept C ABI. The
+// error argument is only ever hashed/compared, never dereferenced, so passing
+// a fabricated address is memory-safe. These cases must stay clean under the
+// HAZE_SANITIZERS (ASan+UBSan) build (no invalid/double free is ever executed).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("error path: freeing a null host pointer is a silent success", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeFreeHost(nullptr) == HAZE_SUCCESS);
+}
+
+TEST_CASE("error path: freeing a foreign host pointer is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // A pointer hazeHostAlloc never returned: rejected before any free(), so
+    // no invalid free is executed. A bare integer-literal cast mirrors the
+    // fabricated-pointer pattern already used in test_memory.cpp and is only
+    // ever hashed/compared, never dereferenced.
+    void *const foreign = reinterpret_cast<void *>(0xDEADBEEF);
+    REQUIRE(hazeFreeHost(foreign) == HAZE_ERROR_UNKNOWN_ADDRESS);
+    hazeGetLastError();
+}
+
+TEST_CASE("error path: freeing the same host pointer twice is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    void *h = nullptr;
+    REQUIRE(hazeHostAlloc(&h, 8192, 0) == HAZE_SUCCESS);
+    REQUIRE(h != nullptr);
+    // First free releases the real allocation; the second must be rejected and
+    // must NOT call free() again (which would be a double free).
+    REQUIRE(hazeFreeHost(h) == HAZE_SUCCESS);
+    REQUIRE(hazeFreeHost(h) == HAZE_ERROR_UNKNOWN_ADDRESS);
+    hazeGetLastError();
+}
+
+TEST_CASE("error path: destroying a foreign stream handle is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    hazeStream_t const foreign = reinterpret_cast<hazeStream_t>(0xDEADBEEF);
+    REQUIRE(hazeStreamDestroy(foreign) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("error path: destroying the same stream twice is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    hazeStream_t s = nullptr;
+    REQUIRE(hazeStreamCreate(&s) == HAZE_SUCCESS);
+    REQUIRE(s != nullptr);
+    // First destroy frees the handle; the second must be rejected and must NOT
+    // delete the freed handle again.
+    REQUIRE(hazeStreamDestroy(s) == HAZE_SUCCESS);
+    REQUIRE(hazeStreamDestroy(s) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("error path: destroying a foreign event handle is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    hazeEvent_t const foreign = reinterpret_cast<hazeEvent_t>(0xDEADBEEF);
+    REQUIRE(hazeEventDestroy(foreign) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("error path: destroying the same event twice is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    hazeEvent_t e = nullptr;
+    REQUIRE(hazeEventCreate(&e) == HAZE_SUCCESS);
+    REQUIRE(e != nullptr);
+    REQUIRE(hazeEventDestroy(e) == HAZE_SUCCESS);
+    REQUIRE(hazeEventDestroy(e) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+// ---------------------------------------------------------------------------
 // Lock-order / concurrency stress, hidden by default via the [.] tag and
 // intended for the HAZE_TSAN build. Many worker threads are released together
 // by a std::barrier and then each drives an independent malloc -> memset ->

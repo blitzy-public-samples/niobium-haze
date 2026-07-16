@@ -409,11 +409,12 @@ void DeviceAllocator::register_host_pointer(const void *ptr) noexcept {
     }
 }
 
-void DeviceAllocator::unregister_host_pointer(const void *ptr) noexcept {
-    if (ptr != nullptr) {
-        HazeLockGuard lock(mutex_);
-        host_set_.erase(ptr);
+bool DeviceAllocator::unregister_host_pointer(const void *ptr) noexcept {
+    if (ptr == nullptr) {
+        return false;
     }
+    HazeLockGuard lock(mutex_);
+    return host_set_.erase(ptr) > 0;
 }
 
 void DeviceAllocator::reset() noexcept {

@@ -83,6 +83,12 @@ HAZE_API hazeError_t hazeDeviceCanAccessPeer(int *can_access, int device, int pe
 // reachable only on physical multi-chip hardware (human follow-up), not
 // exercised by the default build or test suite.
 //
+// hazeHostAlloc returns page-aligned, directly host-accessible pinned
+// storage; hazeFreeHost releases it. Freeing NULL is a no-op success, and
+// freeing a pointer that hazeHostAlloc did not return — a foreign or
+// already-freed pointer, i.e. a double free — returns
+// HAZE_ERROR_UNKNOWN_ADDRESS rather than aborting on an invalid free.
+//
 // hazePointerGetAttributes returns HAZE_SUCCESS for any non-null
 // `attrs` argument. Pointers obtained from hazeMalloc / hazeMallocAsync
 // report HAZE_MEMORY_TYPE_DEVICE; pointers from hazeHostAlloc report
@@ -263,6 +269,11 @@ HAZE_API hazeError_t hazeWriteProgram(void) HAZE_NOEXCEPT;
 // and hazeStreamSynchronize / hazeStreamWaitEvent are no-ops returning
 // HAZE_SUCCESS. The handle and signature surface is preserved for
 // CUDA-shape porting parity.
+//
+// hazeStreamDestroy / hazeEventDestroy release a handle returned by the
+// matching create call. Destroying NULL is a no-op success; destroying a
+// foreign or already-destroyed handle (a double destroy) returns
+// HAZE_ERROR_INVALID_VALUE rather than aborting on an invalid delete.
 
 HAZE_API hazeError_t hazeStreamCreate(hazeStream_t *stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeStreamCreateWithPriority(hazeStream_t *stream, unsigned int flags,

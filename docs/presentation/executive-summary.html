@@ -3,6 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- SEC-03 defense-in-depth: Content-Security-Policy restricts executable and
+       content origins to 'self' plus the pinned jsDelivr CDN. 'unsafe-inline'
+       is retained for the deck's own inline module bootstrap and inline Blitzy
+       theme (mandatory for a single-file self-contained artifact); frame-src
+       data: is required for Mermaid's sandboxed diagram iframes. SRI-omission
+       decision and full rationale: docs/decision-log.md D-52. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data:; font-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net; frame-src data:; child-src data:; base-uri 'self'; object-src 'none'">
+
   <title>Haze (libhaze) — Executive Summary</title>
   <meta name="description" content="Executive summary of the Haze (libhaze) initiative: advancing a C++23 record-and-replay runtime with a CUDA-shaped C ABI for the Niobium FHE accelerator toward a benchmarked, coverage-gated, documented library.">
 
@@ -14,8 +23,8 @@
        intended experience, present full-screen on a 16:9 display. -->
 
   <!-- Pinned reveal.js 5.1.0 structural stylesheets (layout only; Blitzy theme is inline below) -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reset.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reset.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css" crossorigin="anonymous">
 
   <!-- Inline Blitzy brand theme -->
   <style>
@@ -456,7 +465,7 @@ graph LR
         <div class="tile-grid cols-4">
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="blocks"></i></span><h3>Feature completion</h3></div><p>Graph capture, peer access, and performance counters — delivered where the record-and-replay model permits.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="gauge"></i></span><h3>Benchmarking</h3></div><p>A Google Benchmark harness with a CI regression gate.</p></div>
-          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="shield-check"></i></span><h3>Coverage gate</h3></div><p>An 80% line-coverage threshold on the core and API layers <em>(active — passing at 85.70%)</em>.</p></div>
+          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="shield-check"></i></span><h3>Coverage gate</h3></div><p>An 80% line-coverage threshold on the core and API layers <em>(active — passing at 85.50%)</em>.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="book-open"></i></span><h3>Docs &amp; examples</h3></div><p>A documentation tree plus runnable examples.</p></div>
         </div>
         <div class="footer"><span>Haze · libhaze</span><span class="fbrand wordmark">Blitzy</span></div>
@@ -473,7 +482,7 @@ graph LR
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P1</span></span></td><td>Benchmarking</td><td>Google Benchmark + <span class="mono">make bench</span> + CI regression gate</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Peer access</td><td>simulator-only (physical multi-chip = human follow-up)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Performance counters</td><td>additive counters via the API (delivered)</td></tr>
-            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Coverage</td><td>80% line-coverage gate on <span class="mono">src/core/</span> + <span class="mono">src/api/</span> (active — 85.70%)</td></tr>
+            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Coverage</td><td>80% line-coverage gate on <span class="mono">src/core/</span> + <span class="mono">src/api/</span> (active — 85.50%)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Tests</td><td>backfill + nine hardening categories under sanitizers (delivered)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P3</span></span></td><td>Docs &amp; examples</td><td><span class="mono">docs/</span> tree + runnable <span class="mono">examples/</span></td></tr>
           </tbody>
@@ -599,10 +608,10 @@ graph LR
         <div class="split">
           <div>
             <p class="lead">Clang source-based coverage (<span class="mono">llvm-profdata</span> + <span class="mono">llvm-cov</span>) — already in the toolchain, <strong>no new runtime dependency</strong>.</p>
-            <div style="margin:6px 0 10px;"><span class="badge ok"><i data-lucide="circle-check"></i>Delivered — <span class="mono">HAZE_COVERAGE</span> option, <span class="mono">make coverage</span> target, and CI gate all wired; passing at 85.70%</span></div>
+            <div style="margin:6px 0 10px;"><span class="badge ok"><i data-lucide="circle-check"></i>Delivered — <span class="mono">HAZE_COVERAGE</span> option, <span class="mono">make coverage</span> target, and CI gate all wired; passing at 85.50%</span></div>
             <ul class="clean">
               <li>Scoped to <span class="mono">src/core/</span> + <span class="mono">src/api/</span>.</li>
-              <li>A CI gate enforces <strong>80% line coverage</strong> <strong>(active — passing at 85.70%)</strong>.</li>
+              <li>A CI gate enforces <strong>80% line coverage</strong> <strong>(active — passing at 85.50%)</strong>.</li>
               <li>The coverage driver (<span class="mono">scripts/coverage.sh</span>), the <span class="mono">make coverage</span> target, the <span class="mono">HAZE_COVERAGE</span> option, and the CI gate are all wired and live.</li>
               <li>Sequenced <strong>after</strong> backfill and hardening raise coverage — so it never gates the branch red before coverage exists.</li>
             </ul>
@@ -795,9 +804,9 @@ graph LR
   </div>
 
   <!-- reveal.js UMD (classic script -> sets window.Reveal) -->
-  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js" crossorigin="anonymous"></script>
   <!-- Lucide UMD (classic script -> sets window.lucide) -->
-  <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js" crossorigin="anonymous"></script>
   <!-- Deck bootstrap: reveal.js and Lucide initialize first, then Mermaid via dynamic import(). Rationale: decision log D-13. -->
   <script type="module">
     // Resolve Lucide icon placeholders up front (safe no-op if the UMD bundle did not load).
@@ -827,14 +836,15 @@ graph LR
     // Rationale: decision log D-13.
     const nodes = [...document.querySelectorAll('.mermaid')];
 
-    // --- S1 security hardening (decision log D-33) ---
-    // Mermaid 11.4.0 is a frozen, Rule 3-pinned dependency with a known
-    // HTML/DOM-injection class of issues under interactive security levels. We
-    // render every diagram in the official sandboxed <iframe> mode, which the
-    // upstream advisory (GHSA-ghcm-xqfw-q4vr) names as the mitigation: the
-    // iframe carries no allow-scripts, so no JavaScript from a diagram can run
-    // in the deck's context. All diagram definitions in this deck are FIXED and
-    // TRUSTED (static text authored in this file, never user-supplied).
+    // --- S1 security hardening (decision log D-33, D-51) ---
+    // Mermaid is pinned to 11.15.0 — the patched release for the Mermaid
+    // HTML/DOM-injection and XSS advisories (GHSA-ghcm-xqfw-q4vr and related).
+    // Sandbox mode is retained as defense-in-depth: every diagram renders in the
+    // official sandboxed <iframe> (no allow-scripts), so no JavaScript from a
+    // diagram can run in the deck's context. All diagram definitions in this
+    // deck are FIXED and TRUSTED (static text authored in this file, never
+    // user-supplied). The version bump deviates from the Rule 3 literal 11.4.0
+    // pin; see decision log D-51.
     const MERMAID_SECURITY_LEVEL = 'sandbox';
     // Regression guard 1: refuse any interactive/unsafe security level. If a
     // future edit lowers this to 'loose'/'antiscript', fail loudly and fall
@@ -850,7 +860,7 @@ graph LR
       if (!MERMAID_LEVEL_SAFE) {
         throw new Error('Mermaid securityLevel regression: refusing non-sandbox level "' + MERMAID_SECURITY_LEVEL + '"');
       }
-      const { default: mermaid } = await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.0/dist/mermaid.esm.min.mjs');
+      const { default: mermaid } = await import('https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs');
 
       mermaid.initialize({
         startOnLoad: false,

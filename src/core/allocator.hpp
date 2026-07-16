@@ -160,7 +160,11 @@ class DeviceAllocator {
     // can report it as HOST. The set is keyed by raw void* — pointers
     // are unique because posix_memalign returns distinct addresses.
     void register_host_pointer(const void *ptr) noexcept HAZE_EXCLUDES(mutex_);
-    void unregister_host_pointer(const void *ptr) noexcept HAZE_EXCLUDES(mutex_);
+    // Drop a hazeHostAlloc tracking entry. Returns true iff the pointer was
+    // currently tracked (so the caller may free it), false for a null,
+    // foreign, or already-freed pointer. The membership test and erase happen
+    // under a single lock so the answer cannot race a concurrent free.
+    bool unregister_host_pointer(const void *ptr) noexcept HAZE_EXCLUDES(mutex_);
 
     // Monotonic allocation generation for `addr`, or 0 if the address is not
     // currently live. Every allocate() (fresh or recycled from the free list)

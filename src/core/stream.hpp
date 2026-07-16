@@ -28,15 +28,21 @@ struct haze_event_s {
 
 namespace haze {
 
-// Free functions instead of registry classes — state is just two
-// counters, not enough invariants to justify a wrapper.
+// Stream/event handles are tracked in per-kind live-handle registries so a
+// foreign or already-destroyed handle can be rejected instead of fed to a raw
+// delete (which would abort). create() registers the handle; destroy() removes
+// and frees it. The registries are the sole owners of live handles.
 
-hazeStream_t stream_create() noexcept; // new haze_stream_s, caller owns
-void stream_destroy(hazeStream_t s) noexcept;
+hazeStream_t stream_create() noexcept; // new haze_stream_s, registered, caller owns
+// Destroy a stream. Returns true if the handle was destroyed (a live handle,
+// or NULL which is a no-op success), false for a foreign or already-destroyed
+// handle so the caller can surface HAZE_ERROR_INVALID_VALUE.
+bool stream_destroy(hazeStream_t s) noexcept;
 void streams_reset() noexcept;
 
 hazeEvent_t event_create() noexcept;
-void event_destroy(hazeEvent_t e) noexcept;
+// Destroy an event. Same contract as stream_destroy.
+bool event_destroy(hazeEvent_t e) noexcept;
 void event_record(hazeEvent_t e) noexcept;
 void events_reset() noexcept;
 

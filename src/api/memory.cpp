@@ -111,7 +111,16 @@ extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*fla
 }
 
 extern "C" hazeError_t hazeFreeHost(void *ptr) noexcept {
-    haze::allocator().unregister_host_pointer(ptr);
+    // Freeing NULL is a documented no-op success (matches free(NULL) and the
+    // hazeFree(NULL) convention).
+    if (ptr == nullptr)
+        return HAZE_SUCCESS;
+    // Only free a pointer this allocator currently tracks. unregister returns
+    // false for a foreign or already-freed pointer, in which case calling
+    // libc free() would abort (invalid/double free); return the documented
+    // error instead so no termination crosses the noexcept C ABI.
+    if (!haze::allocator().unregister_host_pointer(ptr))
+        return set_error(HAZE_ERROR_UNKNOWN_ADDRESS);
     // posix_memalign-allocated; libc free is the matched deallocator.
     free(ptr); // NOLINT(cppcoreguidelines-no-malloc)
     return HAZE_SUCCESS;

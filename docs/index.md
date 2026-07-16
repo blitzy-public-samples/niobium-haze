@@ -41,7 +41,7 @@ graph TD
 - [`Testing`](./testing.md) — the Catch2 suites and tags, the CTest targets, and
   sanitizer builds (`HAZE_SANITIZERS`/`HAZE_TSAN`). The 80% line-coverage gate on
   `src/core/` and `src/api/` is wired and enforced in CI, currently passing at
-  85.70%.
+  85.50%.
 - [`Decision Log`](./decision-log.md) — the Explainability rationale for every
   non-trivial decision and the bidirectional traceability matrix (Rule 1); it is
   the single source of truth for why a choice was made.
