@@ -639,6 +639,151 @@ TEST_CASE("graph capture: a same-topology exec update rebinds and changes result
     gg2.release();
 }
 
+TEST_CASE("graph capture: recapture after a stable-address overwrite rebinds both operands",
+          "[integration]") {
+    // Regression for the graph-capture / exec-update corruption: recapturing
+    // the SAME topology at the SAME device addresses AFTER a launch that
+    // re-tagged one operand at a stable address must rebind BOTH operands, not
+    // silently alias the overwritten operand onto the other. A launch resets
+    // the libnbfhetch synthetic-address space, invalidating every input
+    // polynomial the epoch still cached; a recapture that reused those cached
+    // polynomials (skipping a re-tag) collapsed the two distinct operands onto
+    // one synthetic address, so the replayed graph computed add(a, a) instead
+    // of add(a, b2) and the same-topology exec update was spuriously rejected.
+    const uint64_t modulus = haze::test::setup_integration_compute_config(kRingDim, kQ0, 0);
+
+    void *a = nullptr;
+    void *b = nullptr;
+    void *dst_add = nullptr;
+    void *dst_mul = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    DeviceGuard ga(a);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gb(b);
+    REQUIRE(hazeMalloc(&dst_add, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gda(dst_add);
+    REQUIRE(hazeMalloc(&dst_mul, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gdm(dst_mul);
+
+    // Distinct operands so add(a, a)/mul(a, a) (the corruption) provably differ
+    // from add(a, b2)/mul(a, b2) (the correct result) in every coefficient.
+    const std::vector<uint64_t> avec = haze::test::make_residue(modulus, 0x1111ULL, kRingDim);
+    const std::vector<uint64_t> b1vec = haze::test::make_residue(modulus, 0x2222ULL, kRingDim);
+    const std::vector<uint64_t> b2vec = haze::test::make_residue(modulus, 0x3333ULL, kRingDim);
+    REQUIRE(hazeMemcpy(a, avec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, b1vec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    // hazeMul is the pointwise product (a * b) mod q for evaluation-domain
+    // residues (see test_compute.cpp), so the host reference is exact.
+    const auto mul_mod = [](uint64_t x, uint64_t y, uint64_t q) {
+        return static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(y)) %
+                                     q);
+    };
+
+    // Two-op topology: dst_add = a + b, dst_mul = a * b. Both operands are the
+    // SAME two live-in addresses, so a recapture must re-read and re-tag both.
+    const auto capture_two_ops = [&](hazeGraph_t *out) {
+        CaptureGuard capture_drain;
+        REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAdd(dst_add, a, b, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMul(dst_mul, a, b, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst_add) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst_mul) == HAZE_SUCCESS);
+        REQUIRE(hazeStreamEndCapture(nullptr, out) == HAZE_SUCCESS);
+    };
+
+    hazeGraph_t g1 = nullptr;
+    capture_two_ops(&g1);
+    REQUIRE(g1 != nullptr);
+    GraphGuard gg1(g1);
+
+    hazeGraphExec_t ex1 = nullptr;
+    REQUIRE(hazeGraphInstantiate(&ex1, g1) == HAZE_SUCCESS);
+    REQUIRE(ex1 != nullptr);
+    ExecGuard ge1(ex1);
+
+    // First launch reads the current shadows (a, b1).
+    REQUIRE(hazeGraphLaunch(ex1, nullptr) == HAZE_SUCCESS);
+
+    // Overwrite b in place with different bytes, then relaunch the SAME exec.
+    // Per D-34 the relaunch recomputes from the current shadow at the stable
+    // address, so this must already reflect b2.
+    REQUIRE(hazeMemcpy(b, b2vec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeGraphLaunch(ex1, nullptr) == HAZE_SUCCESS);
+
+    std::vector<uint64_t> expect_add(kRingDim);
+    std::vector<uint64_t> expect_mul(kRingDim);
+    std::vector<uint64_t> alias_add(kRingDim); // the corruption: add(a, a)
+    std::vector<uint64_t> alias_mul(kRingDim); // the corruption: mul(a, a)
+    for (std::size_t k = 0; k < kRingDim; ++k) {
+        expect_add[k] = haze::test::add_mod(avec[k], b2vec[k], modulus);
+        expect_mul[k] = mul_mod(avec[k], b2vec[k], modulus);
+        alias_add[k] = haze::test::add_mod(avec[k], avec[k], modulus);
+        alias_mul[k] = mul_mod(avec[k], avec[k], modulus);
+    }
+
+    std::vector<uint64_t> relaunch_add(kRingDim, 0xDEADBEEFULL);
+    std::vector<uint64_t> relaunch_mul(kRingDim, 0xDEADBEEFULL);
+    REQUIRE(hazeMemcpy(relaunch_add.data(), dst_add, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(relaunch_mul.data(), dst_mul, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    REQUIRE(relaunch_add == expect_add);
+    REQUIRE(relaunch_mul == expect_mul);
+
+    // Recapture the SAME topology at the SAME addresses AFTER the launch: the
+    // corruption trigger. Both a (stale from the first capture) and b
+    // (re-tagged by the overwrite after the launch's synthetic-address reset)
+    // must rebind as two DISTINCT live-ins.
+    hazeGraph_t g2 = nullptr;
+    capture_two_ops(&g2);
+    REQUIRE(g2 != nullptr);
+    GraphGuard gg2(g2);
+
+    // The same-topology update must be ACCEPTED. It was spuriously rejected
+    // with HAZE_ERROR_INVALID_VALUE when the recaptured trace signature was
+    // corrupted by the operand aliasing.
+    REQUIRE(hazeGraphExecUpdate(ex1, g2) == HAZE_SUCCESS);
+    REQUIRE(hazeGraphLaunch(ex1, nullptr) == HAZE_SUCCESS);
+    std::vector<uint64_t> upd_add(kRingDim, 0xDEADBEEFULL);
+    std::vector<uint64_t> upd_mul(kRingDim, 0xDEADBEEFULL);
+    REQUIRE(hazeMemcpy(upd_add.data(), dst_add, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(upd_mul.data(), dst_mul, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    REQUIRE(upd_add == expect_add);
+    REQUIRE(upd_mul == expect_mul);
+    REQUIRE(upd_add != alias_add);
+    REQUIRE(upd_mul != alias_mul);
+
+    // A fresh instantiate of the recaptured graph must likewise compute
+    // add(a, b2) / mul(a, b2), never the aliased add(a, a) / mul(a, a).
+    hazeGraphExec_t ex2 = nullptr;
+    REQUIRE(hazeGraphInstantiate(&ex2, g2) == HAZE_SUCCESS);
+    REQUIRE(ex2 != nullptr);
+    ExecGuard ge2(ex2);
+    REQUIRE(hazeGraphLaunch(ex2, nullptr) == HAZE_SUCCESS);
+    std::vector<uint64_t> fresh_add(kRingDim, 0xDEADBEEFULL);
+    std::vector<uint64_t> fresh_mul(kRingDim, 0xDEADBEEFULL);
+    REQUIRE(hazeMemcpy(fresh_add.data(), dst_add, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(fresh_mul.data(), dst_mul, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    REQUIRE(fresh_add == expect_add);
+    REQUIRE(fresh_mul == expect_mul);
+    REQUIRE(fresh_add != alias_add);
+    REQUIRE(fresh_mul != alias_mul);
+
+    REQUIRE(hazeGraphExecDestroy(ex2) == HAZE_SUCCESS);
+    ge2.release();
+    REQUIRE(hazeGraphExecDestroy(ex1) == HAZE_SUCCESS);
+    ge1.release();
+    REQUIRE(hazeGraphDestroy(g1) == HAZE_SUCCESS);
+    gg1.release();
+    REQUIRE(hazeGraphDestroy(g2) == HAZE_SUCCESS);
+    gg2.release();
+}
+
 TEST_CASE("graph capture: exec update rejects a different-operation topology", "[integration]") {
     const uint64_t modulus = haze::test::setup_integration_compute_config(kRingDim, kQ0, 0);
 

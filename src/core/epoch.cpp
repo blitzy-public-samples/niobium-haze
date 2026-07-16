@@ -1046,10 +1046,25 @@ EpochState::replay_snapshot_locked(const EpochTraceSnapshot &snapshot) noexcept 
     // contract for the record-once/replay-many launch path. Guarded because this
     // function is noexcept.
     struct CapturedStateGuard {
+        EpochState *self;
         ~CapturedStateGuard() {
             try {
                 niobium::fhetch::reset_for_epoch();
-                niobium::compiler().clear_captured();
+                // Drop the EpochState recording caches in lockstep with the
+                // fhetch reset above. reset_for_epoch() invalidates
+                // libnbfhetch's synthetic-address space, so every cached
+                // fhetch::Polynomial still held in poly_map_ (and the
+                // input_addrs_ / input-tag-dedup state that mirrors it) is now
+                // stale: a later recapture that reused those cached inputs via
+                // lookup_or_create_locked's cache-hit path -- without re-tagging
+                // them into the freshly reset session -- would collapse distinct
+                // operands onto one synthetic address and silently alias inputs.
+                // clear_state_locked() drops exactly that state and also calls
+                // compiler().clear_captured(), so it subsumes the former
+                // stand-alone clear_captured() here and makes the launch mirror
+                // the flush path's (do_materialize_locked) "don't leak captures
+                // into the next epoch" contract.
+                self->clear_state_locked();
             } catch (...) { // NOLINT(bugprone-empty-catch)
                 // Best-effort cleanup: the clears manipulate in-memory
                 // containers only and are not expected to throw. Swallowing
@@ -1057,7 +1072,7 @@ EpochState::replay_snapshot_locked(const EpochTraceSnapshot &snapshot) noexcept 
                 // at entry regardless.
             }
         }
-    } captured_state_guard;
+    } captured_state_guard{this};
 
     // Re-dispatch the recorded op-sequence against CURRENT inputs. Step 1:
     // start from clean compiler + fhetch capture state so replay()'s internal
