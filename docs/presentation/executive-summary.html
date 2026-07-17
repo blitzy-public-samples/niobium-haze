@@ -68,6 +68,10 @@
     }
 
     html, body, .reveal { background: var(--bg); }
+    /* Layout-transparent landmark wrapper (the main element) fills its parent so
+       reveal.js's body -> .reveal height chain (both height:100%) is preserved and
+       the 1920x1080 canvas renders unchanged. See decision log D-69. */
+    main { display: block; height: 100%; width: 100%; margin: 0; padding: 0; }
     /* Dark brand background and light text for reveal.js scroll-view layers. Rationale: decision log D-15. */
     .reveal-viewport,
     .reveal-viewport.reveal-scroll,
@@ -390,7 +394,7 @@
        scrollable viewport. This is presentation-layer CSS only; the pinned reveal
        config (width/height/hash/transition) is untouched. See decision log D-63. */
     @media screen and (max-width: 768px) {
-      html, body { height: auto; overflow-x: hidden; }
+      html, body, main { height: auto; overflow-x: hidden; }
       .reveal-viewport, .reveal { height: auto !important; overflow-y: auto !important; }
       .reveal .slides {
         position: static !important;
@@ -416,16 +420,58 @@
       .reveal h2, .reveal .slide-title { font-size: clamp(23px, 6.6vw, 46px) !important; line-height: 1.15 !important; }
       .reveal h3 { font-size: clamp(18px, 5vw, 32px) !important; }
       .reveal p, .reveal li, .reveal .chip, .reveal .badge, .reveal .tile p { font-size: clamp(14px, 4vw, 22px) !important; }
+      /* Pill badges are inline-flex with no wrap, so their text + code tokens stay
+         on one row and overflow off-slide on narrow phones. Allow the flex items to
+         wrap onto multiple rows and let embedded code tokens break. */
+      .reveal .badge { flex-wrap: wrap !important; max-width: 100% !important; }
+      .reveal .badge .mono { white-space: normal !important; overflow-wrap: anywhere !important; }
       .reveal .lead { font-size: clamp(16px, 4.6vw, 26px) !important; max-width: 100% !important; }
       /* Stack multi-column tile/diagram grids into one readable column. */
       .reveal .tile-grid, .reveal .cols-2, .reveal .cols-3 { display: block !important; }
       .reveal .tile { margin: 0 0 3.5vw 0 !important; }
+      /* Two-column .split layouts (text beside a chart card) must also stack to a
+         single column so the chart-wrap column is full-width instead of being
+         crushed, which would overflow its donut/gauge off-slide. Grid gap does not
+         apply once display:block, so restore vertical spacing between the halves. */
+      .reveal .split { display: block !important; }
+      .reveal .split > * + * { margin-top: 28px !important; }
       /* Media and Mermaid diagram iframes shrink to fit the column. */
       .reveal iframe, .reveal img, .reveal svg { max-width: 100% !important; height: auto !important; }
+      /* P6-UI-04 — fixed-width visuals (charts, the workstreams table, the roadmap
+         timeline) must scale or stack at <=768px instead of clipping off-slide.
+         Rationale: decision log D-68. */
+      .reveal .chart-wrap {
+        width: 100% !important; max-width: 100% !important;
+        box-sizing: border-box !important; padding: 16px !important;
+        overflow-x: auto !important;
+      }
+      .reveal .svg-chart { width: 100% !important; max-width: 100% !important; height: auto !important; }
+      /* Keep the square coverage gauge at its natural size (wide bar charts still
+         fill the column via the rule above). */
+      .reveal svg[aria-label*="gauge"] { width: auto !important; max-width: 300px !important; }
+      /* Workstreams table: drop the fixed 130px/360px column widths, shrink type,
+         and let cells wrap so the third "Outcome" column can never clip. */
+      .reveal table.brand { font-size: clamp(12px, 3.2vw, 18px) !important; }
+      .reveal table.brand thead th, .reveal table.brand tbody td {
+        width: auto !important; padding: 10px 12px !important;
+        white-space: normal !important; word-break: break-word !important; overflow-wrap: anywhere !important;
+      }
+      /* Keep the compact tier pill (P1/P2/P3) on a single line; the cell-level
+         word-break above must not split its two characters. */
+      .reveal table.brand .pill-tier {
+        white-space: nowrap !important; word-break: normal !important; overflow-wrap: normal !important;
+      }
+      /* Roadmap timeline: stack the six nodes into one column and drop the
+         horizontal connector track, which has no meaning when stacked. */
+      .reveal .timeline .nodes { grid-template-columns: 1fr !important; gap: 22px !important; }
+      .reveal .timeline .track { display: none !important; }
+      .reveal .timeline .step { max-width: 100% !important; }
     }
   </style>
 </head>
 <body>
+  <!-- P6-UI-05: single top-level landmark region wrapping the deck. Rationale: decision log D-69. -->
+  <main>
   <div class="reveal">
     <div class="slides">
 
@@ -513,7 +559,7 @@ graph LR
         <div class="tile-grid cols-4">
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="blocks"></i></span><h3>Feature completion</h3></div><p>Graph capture, peer access, and performance counters — delivered where the record-and-replay model permits.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="gauge"></i></span><h3>Benchmarking</h3></div><p>A Google Benchmark harness with a CI regression gate.</p></div>
-          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="shield-check"></i></span><h3>Coverage gate</h3></div><p>An 80% line-coverage threshold on the core and API layers <em>(active — passing at 85.50%)</em>.</p></div>
+          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="shield-check"></i></span><h3>Coverage gate</h3></div><p>An 80% line-coverage threshold on the core and API layers <em>(active — passing at 85.85%)</em>.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="book-open"></i></span><h3>Docs &amp; examples</h3></div><p>A documentation tree plus runnable examples.</p></div>
         </div>
         <div class="footer"><span>Haze · libhaze</span><span class="fbrand wordmark">Blitzy</span></div>
@@ -530,7 +576,7 @@ graph LR
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P1</span></span></td><td>Benchmarking</td><td>Google Benchmark + <span class="mono">make bench</span> + CI regression gate</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Peer access</td><td>simulator-only (physical multi-chip = human follow-up)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Performance counters</td><td>additive counters via the API (delivered)</td></tr>
-            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Coverage</td><td>80% line-coverage gate on <span class="mono">src/core/</span> + <span class="mono">src/api/</span> (active — 85.50%)</td></tr>
+            <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Coverage</td><td>80% line-coverage gate on <span class="mono">src/core/</span> + <span class="mono">src/api/</span> (active — 85.85%)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P2</span></span></td><td>Tests</td><td>backfill + nine hardening categories under sanitizers (delivered)</td></tr>
             <tr><td><span class="tier"><i data-lucide="flag"></i><span class="pill-tier">P3</span></span></td><td>Docs &amp; examples</td><td><span class="mono">docs/</span> tree + runnable <span class="mono">examples/</span></td></tr>
           </tbody>
@@ -656,10 +702,10 @@ graph LR
         <div class="split">
           <div>
             <p class="lead">Clang source-based coverage (<span class="mono">llvm-profdata</span> + <span class="mono">llvm-cov</span>) — already in the toolchain, <strong>no new runtime dependency</strong>.</p>
-            <div style="margin:6px 0 10px;"><span class="badge ok"><i data-lucide="circle-check"></i>Delivered — <span class="mono">HAZE_COVERAGE</span> option, <span class="mono">make coverage</span> target, and CI gate all wired; passing at 85.50%</span></div>
+            <div style="margin:6px 0 10px;"><span class="badge ok"><i data-lucide="circle-check"></i>Delivered — <span class="mono">HAZE_COVERAGE</span> option, <span class="mono">make coverage</span> target, and CI gate all wired; passing at 85.85%</span></div>
             <ul class="clean">
               <li>Scoped to <span class="mono">src/core/</span> + <span class="mono">src/api/</span>.</li>
-              <li>A CI gate enforces <strong>80% line coverage</strong> <strong>(active — passing at 85.50%)</strong>.</li>
+              <li>A CI gate enforces <strong>80% line coverage</strong> <strong>(active — passing at 85.85%)</strong>.</li>
               <li>The coverage driver (<span class="mono">scripts/coverage.sh</span>), the <span class="mono">make coverage</span> target, the <span class="mono">HAZE_COVERAGE</span> option, and the CI gate are all wired and live.</li>
               <li>Sequenced <strong>after</strong> backfill and hardening raise coverage — so it never gates the branch red before coverage exists.</li>
             </ul>
@@ -850,6 +896,7 @@ graph LR
 
     </div>
   </div>
+  </main>
 
   <!-- reveal.js UMD (classic script -> sets window.Reveal) -->
   <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js" crossorigin="anonymous"></script>

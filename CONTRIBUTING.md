@@ -112,7 +112,7 @@ default is never exercised in the merge gates.
 > **Coverage:** `make coverage` (and its `HAZE_COVERAGE` build option) is wired in
 > this tree: it builds the instrumented tree, runs the suite, and enforces the 80%
 > line-coverage gate via the coverage driver
-> [`scripts/coverage.sh`](scripts/coverage.sh) — currently passing at **85.50%**.
+> [`scripts/coverage.sh`](scripts/coverage.sh) — currently passing at **85.85%**.
 > A [`.github/workflows/coverage.yml`](.github/workflows/coverage.yml) CI job runs
 > the same gate per PR. The rationale for sequencing the gate after the
 > backfill/hardening work is recorded in
@@ -198,7 +198,7 @@ not be accepted:
   (`build-matrix`, `build-test`, `clang-format`, `flake-check`, `openfhe-bump`,
   `PR - Claude Code Review`, `SCANOSS License Compliance`) plus the three added
   by this initiative — `benchmark`, `coverage` (the 80% line-coverage gate,
-  currently passing at 85.50%), and `sanitizers` (ASan/UBSan + TSan; the
+  currently passing at 85.85%), and `sanitizers` (ASan/UBSan + TSan; the
   `HAZE_SANITIZERS`/`HAZE_TSAN` build options can also be exercised locally).
   Run `make test`, `scripts/clang-format.sh --check`, and `scripts/clang-tidy.sh`
   locally first.

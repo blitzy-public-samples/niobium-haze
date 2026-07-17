@@ -130,7 +130,7 @@ clean under both `HAZE_SANITIZERS` and `HAZE_TSAN`.
 > target, the coverage driver [`../scripts/coverage.sh`](../scripts/coverage.sh),
 > and the coverage CI gate are all wired. `make coverage` builds instrumented,
 > runs the suite, and enforces the 80% line-coverage threshold on `src/core/` and
-> `src/api/` — currently passing at **85.50%**. The workflow below is the live
+> `src/api/` — currently passing at **85.85%**. The workflow below is the live
 > design.
 
 Coverage uses Clang source-based instrumentation, gated behind the
@@ -168,7 +168,7 @@ llvm-cov export -format=lcov -instr-profile=haze.profdata \
 
 The [`../.github/workflows/coverage.yml`](../.github/workflows/coverage.yml)
 coverage CI job enforces an **80% line-coverage threshold** on `src/core/` and
-`src/api/`, failing the job below it (currently passing at **85.50%**). The gate
+`src/api/`, failing the job below it (currently passing at **85.85%**). The gate
 is intentionally sequenced to be enabled only after the backfill and hardening
 tests raised coverage to clear it, so turning it on did not retroactively redden
 the branch. An HTML report is optional via `lcov`'s `genhtml`. On lcov 2.x,
@@ -261,7 +261,7 @@ This initiative adds three new jobs alongside them, for ten workflows total:
 - `.github/workflows/coverage.yml` — **live.** Builds instrumented, produces the
   coverage report, and enforces the 80% line-coverage gate on `src/core/` and
   `src/api/` via the `HAZE_COVERAGE` option and the `make coverage` target
-  (currently passing at 85.50% — see the coverage note above).
+  (currently passing at 85.85% — see the coverage note above).
 - `.github/workflows/sanitizers.yml` — **live.** Runs ASan/UBSan and TSan over
   the hardening tests. The `HAZE_SANITIZERS` and `HAZE_TSAN` build options are
   exercised by this job and can also be run locally.

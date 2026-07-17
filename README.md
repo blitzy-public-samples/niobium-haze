@@ -787,7 +787,7 @@ tune the ops or the record/replay path.
 > are all wired in this tree. `make coverage` builds the instrumented tree, runs
 > the suite, and enforces the **80% line-coverage threshold** on
 > [`src/core/`](src/core/) and [`src/api/`](src/api/) — currently passing at
-> **85.50%**. The rationale for sequencing the gate after the backfill/hardening
+> **85.85%**. The rationale for sequencing the gate after the backfill/hardening
 > work is recorded in [`docs/decision-log.md`](docs/decision-log.md) (D-06, D-10).
 
 Coverage uses Clang's source-based instrumentation. The `-DHAZE_COVERAGE=ON`
