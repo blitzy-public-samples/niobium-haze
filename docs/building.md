@@ -129,11 +129,11 @@ Make variables and / or environment:
 
 ## Runtime target selector
 
-Consumed by `libhaze` itself at run time, not by the Makefile:
+Honored by the test and example harness at run time — **not** by `libhaze` itself and not by the Makefile:
 
 | Variable      | Purpose                                                                                                                                                                                                                                                     |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HAZE_TARGET` | Replay target: `local` (default; in-process simulator) or one of `FHE_SIM`, `FUNC_SIM`, `FPGA_TRI`, `fhetch_sim` (HTTP transport to `nbcc_fhetch_replay`). Read at the first `hazeFlush()`. See [`../include/haze/haze.h`](../include/haze/haze.h) for the full table. |
+| `HAZE_TARGET` | Replay target for the test/example harness: `local` (default; in-process simulator) or one of `FHE_SIM`, `FUNC_SIM`, `FPGA_TRI`, `fhetch_sim` (HTTP transport to `nbcc_fhetch_replay`). `libhaze` does **not** read this variable; the harness forwards it to `hazeSetTarget()` before the first `hazeFlush()`. Application code must call `hazeSetTarget()` explicitly. See [`../include/haze/haze.h`](../include/haze/haze.h) for the full target table. |
 
 ## CMake-level toggles
 

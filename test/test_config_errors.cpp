@@ -161,3 +161,55 @@ TEST_CASE("config error: a full valid configuration sequence succeeds", "[unit]"
     REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 }
+
+// ---------------------------------------------------------------------------
+// Caller-controlled string sanitization (P7-LOG-SEC-01). Program directory,
+// program info, and target strings are forwarded to the vendored trace
+// writer, which echoes them to stdout unescaped. A control byte (notably CR
+// or LF) would let a caller forge lines that mimic Haze's structured log
+// format. These strings must be rejected with HAZE_ERROR_INVALID_VALUE at the
+// Haze API boundary before any dependency handoff, while ordinary and UTF-8
+// paths must still be accepted.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("config error: a program directory containing control characters is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // A newline splits the vendored diagnostic into a forged second line.
+    REQUIRE(hazeSetProgramDirectory("/tmp/haze\n[haze] [cid=999] FAKE.INJECTED: x") ==
+            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+    // Every other C0 control byte and DEL is rejected too.
+    REQUIRE(hazeSetProgramDirectory("/tmp/haze\rfoo") == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeSetProgramDirectory("/tmp/haze\tfoo") == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeSetProgramDirectory("/tmp/haze\x01"
+                                    "foo") == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeSetProgramDirectory("/tmp/haze\x7f"
+                                    "foo") == HAZE_ERROR_INVALID_VALUE);
+}
+
+TEST_CASE("config error: an ordinary or UTF-8 program directory is accepted", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // Plain ASCII path with printable punctuation.
+    REQUIRE(hazeSetProgramDirectory("/tmp/haze-run_1.2 (ok)") == HAZE_SUCCESS);
+    // Bytes >= 0x80 (UTF-8) must not be mistaken for control characters.
+    REQUIRE(hazeSetProgramDirectory("/tmp/h\xc3\xa9ze/\xe2\x9c\x93") == HAZE_SUCCESS);
+}
+
+TEST_CASE("config error: program info fields containing control characters are rejected",
+          "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetProgramInfo("na\nme", "1.0", "desc") == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeSetProgramInfo("name", "1.\r0", "desc") == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeSetProgramInfo("name", "1.0", "de\x01sc") == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+    // A clean triple is still accepted.
+    REQUIRE(hazeSetProgramInfo("prog", "1.0", "a clean description") == HAZE_SUCCESS);
+}
+
+TEST_CASE("config error: a target containing control characters is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetTarget("loc\nal") == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+    // The default target string is accepted.
+    REQUIRE(hazeSetTarget("local") == HAZE_SUCCESS);
+}

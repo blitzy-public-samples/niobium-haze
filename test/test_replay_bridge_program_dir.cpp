@@ -29,13 +29,17 @@
 // asserts the bridge preserves it.
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <haze/haze.h>          // IWYU pragma: keep
 #include <haze/haze_types.h>    // IWYU pragma: keep
 #include <haze/replay_bridge.h> // IWYU pragma: keep
 #include <niobium/compiler.h>   // IWYU pragma: keep
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <system_error>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -73,6 +77,92 @@ TEST_CASE("replay bridge honors a caller-pinned program directory", "[replay_bri
     // And cryptocontext.dat must land in the pinned directory (where the trace
     // and templates are written), so nbcc_fhetch_replay --project=<pinned> finds it.
     CHECK(fs::exists(pinned / "cryptocontext.dat"));
+
+    hazeReplayBridgeReset();
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    fs::remove_all(pinned, ec);
+}
+
+// P7-FS-SEC-02: the simulator writes ciphertext/template/context scratch into
+// the program directory. Those artifacts must be owner-only (files 0600,
+// directories 0700) so they are never group/world readable, even under a
+// permissive umask. Restores the ambient umask on scope exit (RAII) so a
+// failed assertion cannot leak the relaxed mask into later cases.
+namespace {
+struct UmaskGuard {
+    mode_t old_mask;
+    explicit UmaskGuard(mode_t mask) noexcept : old_mask(umask(mask)) {}
+    ~UmaskGuard() { umask(old_mask); }
+    UmaskGuard(const UmaskGuard &) = delete;
+    UmaskGuard &operator=(const UmaskGuard &) = delete;
+};
+} // namespace
+
+TEST_CASE("materialized program-directory artifacts are owner-only (0600/0700)", "[integration]") {
+    const fs::path pinned = fs::temp_directory_path() / "haze_fs_sec02_perms_test";
+    std::error_code ec;
+    fs::remove_all(pinned, ec);
+    REQUIRE(fs::create_directories(pinned, ec));
+
+    // Most permissive umask: prove the runtime tightens artifacts itself rather
+    // than inheriting a restrictive process mask.
+    const UmaskGuard umask_guard(0);
+
+    constexpr size_t kBytes = static_cast<size_t>(kN) * sizeof(uint64_t);
+    std::vector<uint64_t> ha(kN);
+    std::vector<uint64_t> hb(kN);
+    for (uint64_t i = 0; i < kN; ++i) {
+        ha[i] = (i % 101) + 1;
+        hb[i] = (i % 97) + 2;
+    }
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetProgramDirectory(pinned.c_str()) == HAZE_SUCCESS);
+    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(kN) == HAZE_SUCCESS);
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kN, kQ, &picked) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, kQ) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+
+    void *a = nullptr;
+    void *b = nullptr;
+    void *d = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&d, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(a, ha.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, hb.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(d, a, b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(d) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+    // Walk the whole materialized tree: every directory 0700, every regular
+    // file 0600 — no group or world bits anywhere.
+    const fs::path progdir = niobium::compiler().get_program_directory();
+    const fs::perms kFileMode = fs::perms::owner_read | fs::perms::owner_write;
+    const fs::perms kDirMode = fs::perms::owner_all;
+    size_t files = 0;
+    size_t dirs = 0;
+    for (fs::recursive_directory_iterator it(progdir, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        const fs::file_status st = fs::symlink_status(it->path(), ec);
+        REQUIRE_FALSE(ec);
+        if (fs::is_directory(st)) {
+            ++dirs;
+            CHECK((st.permissions() & fs::perms::all) == kDirMode);
+        } else if (fs::is_regular_file(st)) {
+            ++files;
+            CHECK((st.permissions() & fs::perms::all) == kFileMode);
+        }
+    }
+    // The program directory root itself must also be tightened to 0700.
+    CHECK((fs::status(progdir, ec).permissions() & fs::perms::all) == kDirMode);
+    // A real flush must have written artifacts and descended into at least one
+    // subdirectory (ciphertext_templates/serialized_probes), otherwise the
+    // file/dir mode checks above would be vacuous.
+    CHECK(files > 0);
+    CHECK(dirs > 0);
 
     hazeReplayBridgeReset();
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);

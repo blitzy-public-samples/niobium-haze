@@ -16,6 +16,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "core/allocator.hpp"
+#include "core/device.hpp"
 #include "core/epoch.hpp"
 #include "core/metrics.hpp"
 
@@ -33,6 +34,16 @@ namespace fhetch = niobium::fhetch;
 
 std::expected<fhetch::MRP, HazeInternalError>
 build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len) {
+    // P7-ABI-01 defense-in-depth: an MRP group's residue count is bounded by the
+    // device modulus envelope. Reject an oversized len before the reserve()
+    // calls below, which would otherwise throw std::length_error and abort at
+    // the HAZE_NOEXCEPT C ABI boundary. The public shims cap this too, but this
+    // guard keeps every internal caller safe regardless of entry point.
+    if (len > static_cast<std::size_t>(kMaxCiphertextModuli)) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "build_mrp_locked: residue count exceeds supported maximum");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
     std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
     std::vector<DevAddr> addrs;
     pairs.reserve(len);
@@ -61,6 +72,13 @@ build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len
 std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
                                                         const fhetch::MRP &mrp,
                                                         const uint64_t *base, std::size_t len) {
+    // P7-ABI-01 defense-in-depth: bound the residue count before reserve() (see
+    // build_mrp_locked). Keeps internal callers safe even if a shim cap is missed.
+    if (len > static_cast<std::size_t>(kMaxCiphertextModuli)) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "store_mrp_locked: residue count exceeds supported maximum");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
     std::vector<DevAddr> addrs;
     addrs.reserve(len);
     for (std::size_t i = 0; i < len; ++i) {

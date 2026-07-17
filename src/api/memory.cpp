@@ -168,6 +168,17 @@ extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, s
                                      size_t base_len) noexcept {
     if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
+    // P7-ABI-01: reject a hostile MRP group size before the core copy routines
+    // iterate/reserve over it. base_len is the residue/modulus count: it is the
+    // loop bound and the index range into dst[]/src[]/base[], and
+    // copy_device_to_device_mrp reserve()s it (an unbounded value walks past the
+    // arrays and can throw std::length_error, aborting across the HAZE_NOEXCEPT
+    // boundary). A valid MRP group spans no more residues than the device
+    // supports moduli. NOTE: `count` is the per-residue polynomial byte count
+    // (validated against the configured polynomial size downstream), not a
+    // residue count, so it is deliberately NOT bounded here.
+    if (base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
+        return set_error(HAZE_ERROR_INVALID_VALUE);
 
     if (kind == HAZE_MEMCPY_HOST_TO_DEVICE)
         return set_internal_result(haze::copy_h2d_mrp(dst, src, count, base_len));

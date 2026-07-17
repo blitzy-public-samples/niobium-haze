@@ -31,6 +31,18 @@ bool is_supported_ring_dim(uint64_t n) noexcept {
     return (n != 0) && ((n & (n - 1)) == 0);
 }
 
+// True if the NUL-terminated string contains a C0 control byte
+// (0x01-0x1F, which includes CR and LF) or DEL (0x7F). Bytes >= 0x80 are
+// left intact so UTF-8 paths and identifiers remain valid.
+bool contains_control_char(const char *s) noexcept {
+    for (const char *p = s; *p != '\0'; ++p) {
+        const auto byte = static_cast<unsigned char>(*p);
+        if (byte < 0x20U || byte == 0x7FU)
+            return true;
+    }
+    return false;
+}
+
 } // namespace
 
 Config &Config::instance() noexcept {
@@ -127,6 +139,9 @@ std::expected<void, HazeInternalError>
 Config::set_program_info(const char *name, const char *version, const char *description) noexcept {
     if (name == nullptr || version == nullptr || description == nullptr)
         return std::unexpected(HazeInternalError::InvalidArgument);
+    if (contains_control_char(name) || contains_control_char(version) ||
+        contains_control_char(description))
+        return std::unexpected(HazeInternalError::InvalidArgument);
     HazeLockGuard lock(mutex_);
     program_name_ = name;
     program_version_ = version;
@@ -136,7 +151,7 @@ Config::set_program_info(const char *name, const char *version, const char *desc
 }
 
 std::expected<void, HazeInternalError> Config::set_target(const char *target) noexcept {
-    if (target == nullptr)
+    if (target == nullptr || contains_control_char(target))
         return std::unexpected(HazeInternalError::InvalidArgument);
     HazeLockGuard lock(mutex_);
     target_ = target;
@@ -145,7 +160,7 @@ std::expected<void, HazeInternalError> Config::set_target(const char *target) no
 }
 
 std::expected<void, HazeInternalError> Config::set_program_directory(const char *dir) noexcept {
-    if (dir == nullptr)
+    if (dir == nullptr || contains_control_char(dir))
         return std::unexpected(HazeInternalError::InvalidArgument);
     HazeLockGuard lock(mutex_);
     program_dir_ = dir;

@@ -90,8 +90,9 @@ truth that CI extracts and gates.
 
 2. **Configure** — `hazeSetRingDimension(N)`, `hazeSetCiphertextModulus(idx, q)`
    for each residue, and `hazeConfigureDevice()` lock in the FHE parameter set.
-   Optional: `hazeSetTarget("FUNC_SIM")` (or set `HAZE_TARGET` in the
-   environment) to pick a non-default replay target.
+   Optional: `hazeSetTarget("FUNC_SIM")` to pick a non-default replay target.
+   (`libhaze` itself does not read `HAZE_TARGET`; that variable is honored only
+   by the test and example harnesses, which bridge it to `hazeSetTarget`.)
 
 3. **Allocate & Record** — `hazeMalloc` returns one FHETCH-addressable
    polynomial. Compute calls (`hazeAdd`, `hazeMul`, `hazeNTT`, `hazeAutomorph`,
@@ -597,11 +598,11 @@ Make variables and / or environment:
 | `JSON_INCLUDE_DIR`        | `nlohmann/json` single-include directory.                                                                   | unset (use niobium-fhetch's vendor copy). |
 | `NIOBIUM_COMPILER_ROOT`   | Path to a `niobium-compiler` checkout containing `build/nbcc_fhetch_replay`. Required for `test-transport`. | unset.                                    |
 
-Runtime selector (consumed by `libhaze` itself, not the Makefile):
+Runtime target selector (honored by the test and example harness, **not** by `libhaze` itself and not by the Makefile):
 
 | Variable      | Purpose                                                                                                                                                                                                                                                     |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HAZE_TARGET` | Replay target: `local` (default; in-process simulator) or one of `FHE_SIM`, `FUNC_SIM`, `FPGA_TRI`, `fhetch_sim` (HTTP transport to `nbcc_fhetch_replay`). Read at the first `hazeFlush()`. See [`include/haze/haze.h`](include/haze/haze.h) for the full table. |
+| `HAZE_TARGET` | Replay target for the test/example harness: `local` (default; in-process simulator) or one of `FHE_SIM`, `FUNC_SIM`, `FPGA_TRI`, `fhetch_sim` (HTTP transport to `nbcc_fhetch_replay`). `libhaze` does **not** read this variable; the harness forwards it to `hazeSetTarget()` before the first `hazeFlush()`. Application code must call `hazeSetTarget()` explicitly. See [`include/haze/haze.h`](include/haze/haze.h) for the full target table. |
 
 CMake-level toggles (`-D...`):
 
@@ -928,7 +929,9 @@ niobium-haze/
   (no external binary, no transport). The compiler-side targets (`FUNC_SIM`,
   `FHE_SIM`, `FPGA_TRI`, `fhetch_sim`) ship the same trace over HTTP to
   `nbcc_fhetch_replay`. Switching between them is a single `hazeSetTarget`
-  call (or `HAZE_TARGET` env var); the application code does not change.
+  call; the application code does not change. (The `HAZE_TARGET` environment
+  variable selects the target only in the test/example harness, which forwards
+  it to `hazeSetTarget`; `libhaze` itself does not read it.)
 
 ## License
 

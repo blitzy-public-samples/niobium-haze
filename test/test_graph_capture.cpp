@@ -1089,11 +1089,12 @@ TEST_CASE("graph capture: exec and graph entries validate each argument independ
 // exception that reaches std::terminate / SIGABRT across the noexcept boundary.
 // Each case corrupts exactly the private snapshot directory the new exec owns
 // (isolated via list_exec_dirs()), so no other exec or the shared program
-// directory is disturbed. The launch overwrites the program directory with the
-// exec's snapshot (recursive copy, overwrite_existing), so the corrupted file is
-// what the backend actually reads. Surviving to the post-launch REQUIRE is
-// itself the proof that no exception crossed the C ABI: a std::terminate would
-// abort the process before the assertion could run.
+// directory is disturbed. The launch securely rebuilds the program directory
+// from the exec's snapshot (remove_all + a fresh recursive copy), so the
+// corrupted trace file the snapshot carries is what the backend actually reads.
+// Surviving to the post-launch REQUIRE is itself the proof that no exception
+// crossed the C ABI: a std::terminate would abort the process before the
+// assertion could run.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("graph capture: a corrupt on-disk trace fails launch cleanly without crossing the C ABI",
@@ -1230,12 +1231,14 @@ TEST_CASE("graph capture: a corrupt serialized probe yields HAZE_ERROR_INTERNAL,
     REQUIRE(new_count == 1);
     REQUIRE(!exec_dir.empty());
 
-    // Remove the ciphertext template from BOTH the exec's snapshot directory and
-    // the pinned program directory. The launch's recursive copy
-    // (overwrite_existing) cannot delete a program-directory file that is absent
-    // from the source, so the program-directory copy must be removed directly;
-    // with it gone, reconstruction has no template to rebuild the probe and
-    // skips, leaving the planted corrupt probe for fhetch::result() to read.
+    // Remove the ciphertext template from the exec's snapshot directory (the
+    // source the launch rebuilds the program directory from). The launch wipes
+    // and re-copies the program directory from the snapshot, so once the
+    // template is absent from the snapshot the rebuilt program directory has no
+    // template either; reconstruction then has nothing to rebuild the probe from
+    // and skips, leaving the planted corrupt probe for fhetch::result() to read.
+    // The program-directory copy is removed too as belt-and-suspenders (the
+    // remove_all rebuild would clear it regardless).
     std::size_t removed = 0;
     for (const std::filesystem::path &tpl_dir :
          {exec_dir / "ciphertext_templates", program_dir / "ciphertext_templates"}) {
@@ -1412,4 +1415,214 @@ TEST_CASE("graph capture: device reset invalidates captured graphs and execs", "
     ge2.release();
     REQUIRE(hazeGraphDestroy(graph2) == HAZE_SUCCESS);
     gg2.release();
+}
+
+// ---------------------------------------------------------------------------
+// [integration] Graph filesystem-integrity regressions.
+//
+// P12-GRAPH-01: an exec must replay ITS graph, or fail closed -- never silently
+// replay whatever trace happens to sit in the shared program directory.
+// P7-GRAPH-SEC-01: the launch's program-directory rebuild must not follow a
+// symlink planted in that directory and overwrite an out-of-tree file.
+// Both are rooted in replay_snapshot_locked's Step 3 (src/core/epoch.cpp).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("graph capture: launch fails closed when the exec's private trace is gone instead of "
+          "replaying a different graph left in the program directory",
+          "[integration]") {
+    // The exec captures dst = a + b and privately snapshots that trace. A SECOND
+    // graph (dst = a - b) is then captured, rewriting the shared program
+    // directory's sticky trace to the subtract op sequence. If the exec's own
+    // trace is deleted, a launch must NOT fall back to the subtract graph left
+    // in the program directory and silently compute the wrong function -- it
+    // must fail closed with a representable error and leave the output
+    // unmaterialized.
+    std::error_code ec;
+    const std::filesystem::path program_dir =
+        std::filesystem::temp_directory_path(ec) / "haze_qa_p12_missing_trace";
+    std::filesystem::remove_all(program_dir, ec);
+    const uint64_t modulus = setup_compute_config_in_dir(program_dir);
+
+    void *a = nullptr;
+    void *b = nullptr;
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    DeviceGuard ga(a);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gb(b);
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gdst(dst);
+
+    const std::vector<uint64_t> avec = haze::test::make_residue(modulus, 0x5151ULL, kRingDim);
+    const std::vector<uint64_t> bvec = haze::test::make_residue(modulus, 0x6262ULL, kRingDim);
+    REQUIRE(hazeMemcpy(a, avec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, bvec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    // g1: dst = a + b, then instantiate an exec that privately snapshots it.
+    hazeGraph_t g1 = nullptr;
+    {
+        CaptureGuard capture_drain;
+        REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAdd(dst, a, b, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+        REQUIRE(hazeStreamEndCapture(nullptr, &g1) == HAZE_SUCCESS);
+    }
+    REQUIRE(g1 != nullptr);
+    GraphGuard gg1(g1);
+
+    const std::set<std::filesystem::path> before = list_exec_dirs();
+    hazeGraphExec_t exec = nullptr;
+    REQUIRE(hazeGraphInstantiate(&exec, g1) == HAZE_SUCCESS);
+    REQUIRE(exec != nullptr);
+    ExecGuard ge(exec);
+    const std::set<std::filesystem::path> after = list_exec_dirs();
+
+    std::filesystem::path exec_dir;
+    std::size_t new_count = 0;
+    for (const std::filesystem::path &d : after) {
+        if (!before.contains(d)) {
+            exec_dir = d;
+            ++new_count;
+        }
+    }
+    REQUIRE(new_count == 1);
+    REQUIRE(!exec_dir.empty());
+
+    // g2: dst = a - b. Its EndCapture rewrites the shared program directory's
+    // sticky trace to the subtract sequence -- the "different graph" a broken
+    // fallback would run.
+    hazeGraph_t g2 = nullptr;
+    {
+        CaptureGuard capture_drain;
+        REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeSub(dst, a, b, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+        REQUIRE(hazeStreamEndCapture(nullptr, &g2) == HAZE_SUCCESS);
+    }
+    REQUIRE(g2 != nullptr);
+    GraphGuard gg2(g2);
+
+    // Delete the exec's private trace(s): it can no longer prove what it replays.
+    std::size_t removed = 0;
+    for (std::filesystem::directory_iterator it(exec_dir, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (it->path().extension() == ".fhetch") {
+            std::filesystem::remove(it->path(), ec);
+            ++removed;
+        }
+    }
+    REQUIRE(removed >= 1);
+
+    // Fail closed: the launch refuses rather than replaying g2's subtract.
+    REQUIRE(hazeGraphLaunch(exec, nullptr) == HAZE_ERROR_INTERNAL);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_INTERNAL);
+    REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
+
+    // No stale replay materialized the tagged output: a device->host read still
+    // reports it not-flushed rather than returning subtract (or any) data.
+    std::vector<uint64_t> out(kRingDim, 0xDEADBEEFULL);
+    REQUIRE(hazeMemcpy(out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_ERROR_NOT_FLUSHED);
+    hazeGetLastError();
+
+    REQUIRE(hazeGraphExecDestroy(exec) == HAZE_SUCCESS);
+    ge.release();
+    REQUIRE(hazeGraphDestroy(g1) == HAZE_SUCCESS);
+    gg1.release();
+    REQUIRE(hazeGraphDestroy(g2) == HAZE_SUCCESS);
+    gg2.release();
+    std::filesystem::remove_all(program_dir, ec);
+}
+
+TEST_CASE("graph capture: launch does not follow a symlink planted in the program directory to "
+          "overwrite an out-of-tree file",
+          "[integration]") {
+    // A symlink planted inside the shared program directory must never be
+    // followed during the launch's program-directory rebuild: following it would
+    // let an attacker redirect a trace/artifact write to an arbitrary path
+    // outside the tree. The rebuild remove_all()s the program directory
+    // (unlinking the planted symlink AS A LINK, never following it to its
+    // target) and re-copies the trusted snapshot with skip_symlinks, so the
+    // out-of-tree target is left untouched and the replay still runs correctly.
+    std::error_code ec;
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path(ec) / "haze_qa_sec01_graph_symlink";
+    std::filesystem::remove_all(root, ec);
+    const std::filesystem::path program_dir = root / "program";
+    std::filesystem::create_directories(program_dir, ec);
+    REQUIRE(!ec);
+
+    // An out-of-tree victim file and a symlink to it inside the program dir.
+    const std::filesystem::path victim = root / "victim.txt";
+    {
+        std::ofstream v(victim);
+        v << "SENTINEL_BEFORE";
+    }
+    std::filesystem::create_symlink(victim, program_dir / "victim-link", ec);
+    REQUIRE(!ec);
+
+    const uint64_t modulus = setup_compute_config_in_dir(program_dir);
+
+    void *a = nullptr;
+    void *b = nullptr;
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    DeviceGuard ga(a);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gb(b);
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    DeviceGuard gdst(dst);
+
+    const std::vector<uint64_t> avec = haze::test::make_residue(modulus, 0x7373ULL, kRingDim);
+    const std::vector<uint64_t> bvec = haze::test::make_residue(modulus, 0x8484ULL, kRingDim);
+    REQUIRE(hazeMemcpy(a, avec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, bvec.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    hazeGraph_t graph = nullptr;
+    {
+        CaptureGuard capture_drain;
+        REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAdd(dst, a, b, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+        REQUIRE(hazeStreamEndCapture(nullptr, &graph) == HAZE_SUCCESS);
+    }
+    REQUIRE(graph != nullptr);
+    GraphGuard gg(graph);
+
+    hazeGraphExec_t exec = nullptr;
+    REQUIRE(hazeGraphInstantiate(&exec, graph) == HAZE_SUCCESS);
+    REQUIRE(exec != nullptr);
+    ExecGuard ge(exec);
+
+    // Change the victim AFTER capture; a correct launch must not touch it.
+    {
+        std::ofstream v(victim, std::ios::trunc);
+        v << "SENTINEL_AFTER_CAPTURE";
+    }
+
+    REQUIRE(hazeGraphLaunch(exec, nullptr) == HAZE_SUCCESS);
+
+    // The out-of-tree victim is preserved exactly (not clobbered through the
+    // symlink), and it is still a regular file, not replaced by a copied trace.
+    REQUIRE(std::filesystem::is_regular_file(victim, ec));
+    std::string victim_content;
+    {
+        std::ifstream vin(victim);
+        std::getline(vin, victim_content);
+    }
+    REQUIRE(victim_content == "SENTINEL_AFTER_CAPTURE");
+
+    // The launch still replayed the captured add correctly.
+    std::vector<uint64_t> out(kRingDim, 0xDEADBEEFULL);
+    REQUIRE(hazeMemcpy(out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    std::vector<uint64_t> expected(kRingDim);
+    for (std::size_t k = 0; k < kRingDim; ++k)
+        expected[k] = haze::test::add_mod(avec[k], bvec[k], modulus);
+    REQUIRE(out == expected);
+
+    REQUIRE(hazeGraphExecDestroy(exec) == HAZE_SUCCESS);
+    ge.release();
+    REQUIRE(hazeGraphDestroy(graph) == HAZE_SUCCESS);
+    gg.release();
+    std::filesystem::remove_all(root, ec);
 }

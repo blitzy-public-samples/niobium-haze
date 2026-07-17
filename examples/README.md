@@ -51,10 +51,12 @@ already-built `libhaze`. Build the library first, then point the examples
 project at it:
 
 ```sh
-# 1. Build libhaze first (produces build/libhaze.so).
-make build
+# 1. Build libhaze first. MODE=release puts it in build/ (bare `make build`
+#    defaults to MODE=debug and would instead produce dbuild/libhaze.so).
+make build MODE=release
 
-# 2. Configure and build the examples against it.
+# 2. Configure and build the examples against it. HAZE_LIB_DIR must match the
+#    build directory chosen above (build/ for release, dbuild/ for debug).
 cmake -S examples -B examples/build -DHAZE_LIB_DIR="$PWD/build"
 cmake --build examples/build
 ```
@@ -88,6 +90,20 @@ HAZE_TARGET=local ./examples/build/quickstart
 
 # C++ CKKS example (requires stock OpenFHE): expect a line containing "readme-cpp: OK".
 HAZE_TARGET=local ./examples/build/ckks22
+```
+
+Both binaries embed a `RUNPATH` pointing at the build tree and the stock OpenFHE
+`lib/` directory (see `BUILD_RPATH` in `examples/CMakeLists.txt`), so they run
+directly from `examples/build/` without any extra environment. `HAZE_TARGET` is
+consumed by the harness/environment, not the example binaries themselves — they
+run the default `local` in-process simulator regardless (call `hazeSetTarget()`
+in application code to select a different replay target). If you relocate the
+built libraries — or pass a non-default `-DSTOCK_OPENFHE_DIR` and later move that
+tree — point the loader at the stock OpenFHE runtime libraries explicitly:
+
+```sh
+LD_LIBRARY_PATH="$PWD/vendor/lib/openfhe-stock/lib" \
+  HAZE_TARGET=local ./examples/build/ckks22
 ```
 
 To exercise the full docs-as-tests path in one command — extract the examples

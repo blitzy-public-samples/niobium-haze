@@ -161,8 +161,9 @@ The recorded `.fhetch` trace has a single format that both replay tiers consume:
   same trace over HTTP to a running `nbcc_fhetch_replay` instance, which exercises the
   Niobium compilation pipeline and either simulates or executes on hardware.
 
-Switching tiers is a single `hazeSetTarget(...)` call (or the `HAZE_TARGET` environment
-variable); application code does not change.
+Switching tiers is a single `hazeSetTarget(...)` call; application code does not change.
+(The `HAZE_TARGET` environment variable is read only by the test and example harness,
+which forwards it to `hazeSetTarget(...)`; `libhaze` itself does not consult it.)
 
 ### Shadow storage model
 

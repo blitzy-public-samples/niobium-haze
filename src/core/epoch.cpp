@@ -186,6 +186,33 @@ uint64_t trace_signature_for_dir(const std::filesystem::path &dir) noexcept {
     return hash;
 }
 
+// Tighten `root` and every entry beneath it to owner-only permissions:
+// directories to 0700 (owner_all, so the walk can still traverse them) and
+// regular files to 0600 (owner read+write). Best-effort per entry; returns
+// false only when the recursive walk itself fails to complete. The walk can
+// throw, so it is wrapped to preserve the noexcept boundary.
+bool tighten_tree_owner_only(const std::filesystem::path &root) noexcept {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    auto tighten = [](const fs::path &p) noexcept {
+        std::error_code pec;
+        const bool is_dir = fs::is_directory(p, pec);
+        const fs::perms mode =
+            is_dir ? fs::perms::owner_all : (fs::perms::owner_read | fs::perms::owner_write);
+        fs::permissions(p, mode, fs::perm_options::replace, pec);
+    };
+    try {
+        tighten(root);
+        for (fs::recursive_directory_iterator it(root, ec), end; !ec && it != end;
+             it.increment(ec)) {
+            tighten(it->path());
+        }
+    } catch (...) {
+        return false;
+    }
+    return !ec;
+}
+
 } // namespace
 
 EpochState &EpochState::instance() noexcept {
@@ -615,6 +642,10 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked(bool ru
     // out-of-process replay (e.g. on the FPGA host). There is no in-process
     // result to read back, so skip replay + shadow population.
     if (!run_replay) {
+        // Tighten the written project artifacts (trace, inputs, templates,
+        // cryptocontext) under the program directory to owner-only before
+        // returning; best-effort, a chmod failure never fails the operation.
+        (void)tighten_tree_owner_only(niobium::compiler().get_program_directory());
         clear_state_locked();
         return {};
     }
@@ -676,6 +707,11 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked(bool ru
         }
     }
 
+    // Tighten all materialized artifacts (trace, replay JSON/outputs,
+    // serialized_probes, ciphertext templates, cryptocontext) under the
+    // program directory to owner-only before returning; best-effort, a chmod
+    // failure never fails a successful flush.
+    (void)tighten_tree_owner_only(niobium::compiler().get_program_directory());
     clear_state_locked();
     return {};
 }
@@ -1115,19 +1151,63 @@ EpochState::replay_snapshot_locked(const EpochTraceSnapshot &snapshot) noexcept 
         }
     }
 
-    // Step 3: point the compiler at this graph's trace and ring dimension, then
-    // redirect the sticky last_trace_path by overwriting the active program
-    // directory with the snapshot's project (the trace file lands at exactly the
-    // path replay() resolves). set_ring_dimension + the copy are wrapped so no
-    // filesystem/backend exception escapes this noexcept boundary.
+    // Step 3: fail closed if the snapshot's own trace is gone, then securely
+    // rebuild the active program directory from the snapshot before replay.
+    // replay() resolves the trace from the sticky last_trace_path (i.e. the
+    // active program directory), so the snapshot's trace must land there.
+    //
+    // (a) Fail-closed trace check: resolve the snapshot's trace filename from
+    //     its fhetch_replay.json (files.instructions) and require that trace to
+    //     exist as a regular file inside the snapshot. If the private trace was
+    //     removed, blindly refreshing the program directory would leave whatever
+    //     trace currently sits there (a DIFFERENT graph, e.g. one captured after
+    //     this exec was instantiated), and replay() would silently execute that
+    //     wrong op sequence. Refuse instead of running a stale graph.
+    //
+    // (b) Secure rebuild: remove_all() the active program directory first. That
+    //     unlinks any entry an attacker planted there -- including a symlink --
+    //     AS A LINK (remove never follows a symlink to its external target), and
+    //     the directory_iterator remove_all walks does not descend through
+    //     symlinked subdirectories. Recreate it empty and copy the trusted
+    //     snapshot in with skip_symlinks, so no pre-existing destination entry
+    //     can be followed and clobbered and no captured symlink is recreated --
+    //     closing the arbitrary out-of-tree overwrite. Legitimate FHETCH project
+    //     artifacts (fhetch_replay.json, *.fhetch, *.outputs.json, template and
+    //     cryptocontext trees) are regular files/directories, never symlinks, so
+    //     skipping symlinks drops nothing the replay needs. The
+    //     program_dir != snapshot.project_dir guard keeps remove_all away from
+    //     the snapshot itself (the exec's private mkdtemp clone).
+    //
+    // The whole block is wrapped so no filesystem/JSON exception escapes this
+    // noexcept boundary.
     try {
+        std::string trace_file;
+        {
+            std::ifstream idx_in(snapshot.project_dir / "fhetch_replay.json");
+            if (idx_in.is_open()) {
+                auto j = nlohmann::json::parse(idx_in, nullptr, /*allow_exceptions=*/false);
+                if (!j.is_discarded() && j.contains("files"))
+                    trace_file = j["files"].value("instructions", std::string{});
+            }
+        }
+        std::error_code trace_ec;
+        if (trace_file.empty() ||
+            !std::filesystem::is_regular_file(snapshot.project_dir / trace_file, trace_ec) ||
+            trace_ec) {
+            record_internal_error(HazeInternalError::BackendReplayFailed,
+                                  "replay_snapshot_locked: snapshot trace missing; refusing to "
+                                  "replay a stale program directory");
+            return std::unexpected(HazeInternalError::BackendReplayFailed);
+        }
+
         niobium::compiler().set_ring_dimension(ring_dim);
         const std::filesystem::path program_dir = niobium::compiler().get_program_directory();
         if (program_dir != snapshot.project_dir) {
+            std::filesystem::remove_all(program_dir);
             std::filesystem::create_directories(program_dir);
             std::filesystem::copy(snapshot.project_dir, program_dir,
                                   std::filesystem::copy_options::recursive |
-                                      std::filesystem::copy_options::overwrite_existing);
+                                      std::filesystem::copy_options::skip_symlinks);
         }
     } catch (...) {
         record_internal_error(HazeInternalError::BackendReplayFailed,
@@ -1353,33 +1433,12 @@ secure_clone_project_dir(const std::filesystem::path &src) noexcept {
 
     // Re-assert owner-only permissions across the whole cloned tree: copied
     // entries inherit the SOURCE mode bits (potentially group/world readable),
-    // so every entry is tightened to owner-only. Directories keep owner_all so
-    // they remain traversable for the walk; regular files get owner rw only.
-    // The recursive walk can throw, so it is wrapped (noexcept boundary, G5).
-    try {
-        namespace fs = std::filesystem;
-        auto tighten = [](const fs::path &p) noexcept {
-            std::error_code pec;
-            const bool is_dir = fs::is_directory(p, pec);
-            const fs::perms mode =
-                is_dir ? fs::perms::owner_all : (fs::perms::owner_read | fs::perms::owner_write);
-            fs::permissions(p, mode, fs::perm_options::replace, pec);
-        };
-        tighten(dest);
-        for (fs::recursive_directory_iterator it(dest, ec), end; !ec && it != end;
-             it.increment(ec)) {
-            tighten(it->path());
-        }
-        if (ec) {
-            cleanup();
-            record_internal_error(HazeInternalError::SourceUnavailable,
-                                  "secure_clone_project_dir: permission walk failed");
-            return std::unexpected(HazeInternalError::SourceUnavailable);
-        }
-    } catch (...) {
+    // so every entry is tightened to owner-only via the shared helper. A walk
+    // failure here is fatal for a security-critical clone.
+    if (!tighten_tree_owner_only(dest)) {
         cleanup();
         record_internal_error(HazeInternalError::SourceUnavailable,
-                              "secure_clone_project_dir: exception tightening permissions");
+                              "secure_clone_project_dir: permission walk failed");
         return std::unexpected(HazeInternalError::SourceUnavailable);
     }
 

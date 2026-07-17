@@ -60,7 +60,7 @@ default, `build/runs/` for release):
 mkdir -p build/runs && cd build/runs
 HAZE_TARGET=local ../haze_tests "[unit]"                     # every unit case
 HAZE_TARGET=local ../haze_tests "[integration]"              # every integration case
-HAZE_TARGET=local ../haze_tests "hazeAdd: pointwise sum"     # one case by name
+HAZE_TARGET=local ../haze_tests "*hazeAdd: pointwise sum*"   # select cases by name (wildcard)
 HAZE_TARGET=local ../haze_tests --list-tests                 # enumerate cases
 ```
 
@@ -142,18 +142,23 @@ make coverage        # builds instrumented, runs the suite, enforces the 80% gat
 ```
 
 Driven manually, the option is configured into a dedicated tree, then
-`scripts/coverage.sh` run against it:
+`scripts/coverage.sh` run against it. `HAZE_COVERAGE` requires a Clang toolchain
+(the configure step errors out under GCC, which is the default `cc`/`c++` on
+many systems), so select Clang 19 explicitly:
 
 ```sh
-cmake -S . -B build-coverage -DCMAKE_BUILD_TYPE=Debug -DHAZE_COVERAGE=ON
+CC=clang-19 CXX=clang++-19 \
+  cmake -S . -B build-coverage -DCMAKE_BUILD_TYPE=Debug -DHAZE_COVERAGE=ON
 cmake --build build-coverage -j
 scripts/coverage.sh
 ```
 
 `HAZE_COVERAGE` compiles the tree with `-fprofile-instr-generate
--fcoverage-mapping`. Running the instrumented `haze_tests` emits one or more
-`*.profraw` files, which `scripts/coverage.sh` merges and exports as lcov,
-scoped to the two trees the threshold applies to:
+-fcoverage-mapping`. Running that instrumented `haze_tests` emits one or more
+`*.profraw` files; merge them with `llvm-profdata` and export with `llvm-cov`,
+passing the **same** instrumented `./build-coverage/haze_tests` binary that
+produced the profiles (the profile and the binary must match), scoped to the
+two trees the threshold applies to:
 
 ```sh
 llvm-profdata merge -sparse *.profraw -o haze.profdata
@@ -166,10 +171,14 @@ coverage CI job enforces an **80% line-coverage threshold** on `src/core/` and
 `src/api/`, failing the job below it (currently passing at **85.50%**). The gate
 is intentionally sequenced to be enabled only after the backfill and hardening
 tests raised coverage to clear it, so turning it on did not retroactively redden
-the branch. An HTML report is optional via `lcov`'s `genhtml`:
+the branch. An HTML report is optional via `lcov`'s `genhtml`. On lcov 2.x,
+`genhtml` is stricter than `llvm-cov`'s lcov export — it aborts on the derived
+function end-line and hit/line consistency checks — so pass the same
+`--ignore-errors` flags `scripts/coverage.sh` uses:
 
 ```sh
-genhtml coverage.lcov --output-directory coverage-html
+genhtml coverage.lcov --output-directory coverage-html \
+    --ignore-errors inconsistent,unsupported
 ```
 
 The rationale for Clang source-based coverage over `gcov`, and for sequencing

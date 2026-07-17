@@ -22,6 +22,12 @@
        letterboxing of a fixed-canvas presentation, not a layout defect. For the
        intended experience, present full-screen on a 16:9 display. -->
 
+  <!-- Zero-byte inline favicon: stops the browser's automatic /favicon.ico request
+       (a spurious console 404 for this single-file deck). A data: URI keeps the deck
+       fully self-contained (Rule 3) and is permitted by the img-src 'self' data: CSP.
+       See decision log D-60. -->
+  <link rel="icon" href="data:,">
+
   <!-- Pinned reveal.js 5.1.0 structural stylesheets (layout only; Blitzy theme is inline below) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reset.css" crossorigin="anonymous">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css" crossorigin="anonymous">
@@ -374,6 +380,48 @@
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
       }
+    }
+
+    /* P6-UI-01 — small-viewport reflow. The deck's reveal.js canvas is pinned to
+       1920x1080 (Rule 3); on desktop/projector reveal scales it uniformly, but on
+       phones/small tablets that uniform scale collapses to ~0.2 and text becomes
+       unreadable. At <=768px, opt the current slide out of the uniform transform
+       and present it full-width with fluid typography inside a vertically
+       scrollable viewport. This is presentation-layer CSS only; the pinned reveal
+       config (width/height/hash/transition) is untouched. See decision log D-63. */
+    @media screen and (max-width: 768px) {
+      html, body { height: auto; overflow-x: hidden; }
+      .reveal-viewport, .reveal { height: auto !important; overflow-y: auto !important; }
+      .reveal .slides {
+        position: static !important;
+        left: 0 !important; top: 0 !important; right: auto !important; bottom: auto !important;
+        width: 100% !important; height: auto !important;
+        transform: none !important; zoom: 1 !important;
+      }
+      .reveal .slides > section {
+        position: static !important;
+        display: none !important;
+        width: 100% !important; height: auto !important; min-height: 0 !important;
+        transform: none !important;
+        padding: 7vw 5vw !important;
+        box-sizing: border-box;
+      }
+      .reveal .slides > section.present {
+        display: block !important;
+        opacity: 1 !important; visibility: visible !important;
+      }
+      /* Fluid, readable typography that scales with viewport width. */
+      .reveal { font-size: clamp(15px, 4.3vw, 26px); }
+      .reveal h1 { font-size: clamp(30px, 9vw, 60px) !important; line-height: 1.1 !important; }
+      .reveal h2, .reveal .slide-title { font-size: clamp(23px, 6.6vw, 46px) !important; line-height: 1.15 !important; }
+      .reveal h3 { font-size: clamp(18px, 5vw, 32px) !important; }
+      .reveal p, .reveal li, .reveal .chip, .reveal .badge, .reveal .tile p { font-size: clamp(14px, 4vw, 22px) !important; }
+      .reveal .lead { font-size: clamp(16px, 4.6vw, 26px) !important; max-width: 100% !important; }
+      /* Stack multi-column tile/diagram grids into one readable column. */
+      .reveal .tile-grid, .reveal .cols-2, .reveal .cols-3 { display: block !important; }
+      .reveal .tile { margin: 0 0 3.5vw 0 !important; }
+      /* Media and Mermaid diagram iframes shrink to fit the column. */
+      .reveal iframe, .reveal img, .reveal svg { max-width: 100% !important; height: auto !important; }
     }
   </style>
 </head>
@@ -754,7 +802,7 @@ graph LR
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-branch"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Record-and-replay intact</h3><p><span class="mono">hazeFlush</span> remains the sole materialization trigger.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="circle-check"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Three no-ops unchanged</h3><p>Smoke-tested, not reimplemented.</p></div>
           <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="box"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>OpenFHE confined</h3><p>Stays within the replay bridge boundary.</p></div>
-          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-merge"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Existing CI untouched</h3><p>Seven pre-existing workflows untouched; three jobs added — benchmark (advisory), coverage (80% gate), and sanitizers.</p></div>
+          <div class="tile"><div class="tile-head"><span class="tile-icon"><i data-lucide="git-merge"></i></span><span class="badge ok"><i data-lucide="circle-check"></i>Guaranteed</span></div><h3>Existing CI untouched</h3><p>Seven pre-existing workflows untouched; three jobs added — benchmark (hard-failing gate with a deliberately wide, advisory tolerance band), coverage (80% gate), and sanitizers.</p></div>
         </div>
         <div class="footer"><span>Haze · libhaze</span><span class="fbrand wordmark">Blitzy</span></div>
       </section>
@@ -817,6 +865,11 @@ graph LR
     if (window.Reveal) {
       await Reveal.initialize({
         hash: true,
+        // P6-UI-02: create a per-slide browser-history entry so the Back button
+        // steps back through slides instead of leaving the deck (about:blank).
+        // Additive to the pinned hash:true; width/height/transition pins are
+        // unchanged. See decision log D-62.
+        history: true,
         transition: 'slide',
         width: 1920,
         height: 1080,
@@ -830,6 +883,39 @@ graph LR
 
       // Re-resolve icons that enter the DOM after layout changes.
       Reveal.on('slidechanged', () => { if (window.lucide) window.lucide.createIcons(); });
+
+      // P11-UI-03: reveal.js 5.1.0 Controls.bind() attaches ONLY 'touchstart'
+      // (not 'click') to the on-screen nav arrows when the user-agent matches
+      // /android/gi, so on those agents the enabled controls focus but never
+      // navigate on mouse click or on Enter/Space (which the browser delivers as
+      // a synthesized click) — while arrow keys and touch still work. Bind our own
+      // click handler on each arrow so pointer + keyboard activation always
+      // navigate, on every agent. A slidechanged-updated timestamp makes the
+      // handler idempotent: when reveal's own click handler already fired
+      // (non-Android), the slide changed a fraction of a millisecond earlier and
+      // we skip, so one click never advances two slides. Disabled arrows do not
+      // emit click events, so edge arrows stay inert. See decision log D-61.
+      (function ensureControlNavigation() {
+        let lastNav = 0;
+        Reveal.on('slidechanged', () => { lastNav = Date.now(); });
+        const routes = [
+          ['.navigate-left',  () => Reveal.left()],
+          ['.navigate-right', () => Reveal.right()],
+          ['.navigate-up',    () => Reveal.up()],
+          ['.navigate-down',  () => Reveal.down()]
+        ];
+        routes.forEach(([selector, navigate]) => {
+          const button = document.querySelector('.reveal .controls ' + selector);
+          if (!button) return;
+          button.addEventListener('click', (event) => {
+            event.preventDefault();
+            // Skip if a navigation (reveal's own click handler on non-Android, or
+            // the touch that produced this synthesized click) just moved the deck.
+            if (Date.now() - lastNav < 300) return;
+            navigate();
+          }, false);
+        });
+      })();
     }
 
     // Load Mermaid (ESM-only in v11) via dynamic import() after reveal init, inside try/catch.

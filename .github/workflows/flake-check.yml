@@ -23,8 +23,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           submodules: recursive
           fetch-depth: 1
 
@@ -71,10 +72,10 @@ jobs:
           fi
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v22
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: Magic Nix Cache
-        uses: DeterminateSystems/magic-nix-cache-action@v13
+        uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
 
       - name: Build compile_commands.json
         # Configure-only flake derivation yielding a hermetic
@@ -94,7 +95,7 @@ jobs:
         # + clang-tidy.sh; the commit SHA gives a unique save slot and
         # restore-keys resume from the latest match.
         id: ctcache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.ctcache
           key: ctcache-${{ runner.os }}-${{ hashFiles('.clang-tidy', 'flake.lock', 'scripts/clang-tidy.sh') }}-${{ github.sha }}
@@ -117,7 +118,7 @@ jobs:
         # always(): warm the next run even on partial state. ctcache
         # stores only successful verdicts, so it never caches a failure.
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.ctcache
           key: ctcache-${{ runner.os }}-${{ hashFiles('.clang-tidy', 'flake.lock', 'scripts/clang-tidy.sh') }}-${{ github.sha }}
@@ -130,7 +131,7 @@ jobs:
 
       - name: Upload artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: lint-logs-${{ github.run_attempt }}
           path: nix-drv-logs.tgz
@@ -142,8 +143,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           submodules: recursive
           fetch-depth: 1
 
@@ -191,12 +193,12 @@ jobs:
           fi
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v22
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: Magic Nix Cache
         # Zero-config /nix/store cache (GitHub Actions cache). Covers
         # openfhe (~20-30 min cold), niobium-fhetch, and haze across runs.
-        uses: DeterminateSystems/magic-nix-cache-action@v13
+        uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
 
       - name: Build pure-nix checks (nixfmt, haze build, devshell)
         # Not `nix flake check`: that also realizes clang-format, clang-tidy,
@@ -218,7 +220,7 @@ jobs:
 
       - name: Upload artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: flake-check-logs-${{ github.run_attempt }}
           path: nix-drv-logs.tgz

@@ -55,8 +55,16 @@ if(EXISTS "${STOCK_OPENFHE_DIR}/include/openfhe")
   # Link OpenFHE by bare names via a link directory, mirroring the script's
   # -L<stock>/lib -lOPENFHE*; portable across .so/.dylib.
   target_link_directories(ckks22 PRIVATE "${STOCK_OPENFHE_DIR}/lib")
+  # Wrap the OpenFHE trio in --no-as-needed/--as-needed so all three are recorded
+  # as direct DT_NEEDED entries. Without this, the linker's default --as-needed
+  # drops libOPENFHEbinfhe (ckks22.cpp uses no binfhe symbol directly), leaving it
+  # only as a transitive dependency of libOPENFHEpke; the executable's DT_RUNPATH
+  # is consulted by the loader only for direct dependencies, so binfhe would fail
+  # to resolve at run time from the build tree.
   target_link_libraries(ckks22 PRIVATE
-    "${HAZE_LIBRARY}" OPENFHEpke OPENFHEbinfhe OPENFHEcore Threads::Threads)
+    "${HAZE_LIBRARY}"
+    -Wl,--no-as-needed OPENFHEpke OPENFHEbinfhe OPENFHEcore -Wl,--as-needed
+    Threads::Threads)
   set_target_properties(ckks22 PROPERTIES
     BUILD_RPATH "${HAZE_LIB_DIR};${STOCK_OPENFHE_DIR}/lib")
 else()

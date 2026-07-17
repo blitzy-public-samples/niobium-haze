@@ -2,7 +2,10 @@
 #include "common/errors.hpp"
 #include "integration_helpers.hpp"
 
+#include <array>
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -289,5 +292,136 @@ TEST_CASE("error semantics: graph exec update survives a filesystem failure with
     REQUIRE(hazeFree(a) == HAZE_SUCCESS);
     REQUIRE(hazeFree(b) == HAZE_SUCCESS);
     REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+// ---------------------------------------------------------------------------
+// P7-ABI-01 regression: hostile / overflowing modulus counts.
+//
+// Every MRP and basis-conversion entry point takes a caller-supplied residue
+// count (base_len / src_base_len / digit_count / ...). Before the fix an
+// absurd value (e.g. SIZE_MAX) walked the shim past its short pointer/base
+// arrays and drove a std::vector::reserve(count) to throw std::length_error,
+// which escaped these HAZE_NOEXCEPT C-ABI functions and aborted the process
+// (and tripped ASan/UBSan on the intermediate out-of-bounds reads). The guards
+// now cap every such count at haze::kMaxCiphertextModuli (64 -- the device
+// modulus envelope) and return HAZE_ERROR_INVALID_VALUE at the boundary.
+//
+// These cases run under ASan/UBSan (build-asan / the sanitizers workflow): the
+// base/scalar/pointer arrays below are deliberately only three elements long,
+// so if any guard ever regressed to iterate the hostile length the sanitizers
+// would fault on the over-read before the assertion could even be reached.
+// ---------------------------------------------------------------------------
+TEST_CASE("P7-ABI-01: MRP and basis-conversion ops reject a hostile modulus "
+          "count at the ABI boundary",
+          "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+
+    // Short, real backing storage. The guards fire before any of these are
+    // dereferenced, so no device configuration is required to reach them.
+    uint64_t base3[3] = {0x1ULL, 0x3ULL, 0x5ULL};
+    uint64_t scalars3[3] = {0x2ULL, 0x4ULL, 0x6ULL};
+    std::size_t digit_lens3[3] = {1, 1, 1};
+    // Distinct 3-element backing arrays for the destination and the two
+    // sources. The guards fire before any element is dereferenced, but keeping
+    // real short storage means a regressed guard that iterated the hostile
+    // length would over-read these arrays and fault under ASan.
+    uint64_t dst_backing[3] = {0, 0, 0};
+    uint64_t src1_backing[3] = {0, 0, 0};
+    uint64_t src2_backing[3] = {0, 0, 0};
+    void *dst[3] = {&dst_backing[0], &dst_backing[1], &dst_backing[2]};
+    const void *src1[3] = {&src1_backing[0], &src1_backing[1], &src1_backing[2]};
+    const void *src2[3] = {&src2_backing[0], &src2_backing[1], &src2_backing[2]};
+
+    // Just over the envelope (65) and the pathological extreme (SIZE_MAX). Both
+    // must be rejected identically -- the bound is an inclusive '<= 64'.
+    for (const std::size_t bad : {static_cast<std::size_t>(65), SIZE_MAX}) {
+        INFO("hostile modulus count = " << bad);
+
+        // Compute MRP: pairwise ops (base_len is the last count argument).
+        REQUIRE(hazeAddMrp(dst, src1, src2, base3, bad, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeSubMrp(dst, src1, src2, base3, bad, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeMulMrp(dst, src1, src2, base3, bad, nullptr) == HAZE_ERROR_INVALID_VALUE);
+
+        // Compute MRP: scalar ops.
+        REQUIRE(hazeAddScalarMrp(dst, src1, scalars3, base3, bad, nullptr) ==
+                HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeSubScalarMrp(dst, src1, scalars3, base3, bad, nullptr) ==
+                HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeMulScalarMrp(dst, src1, scalars3, base3, bad, nullptr) ==
+                HAZE_ERROR_INVALID_VALUE);
+
+        // Compute MRP: transforms and automorphisms.
+        REQUIRE(hazeNTTMrp(dst, src1, base3, bad, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeINTTMrp(dst, src1, base3, bad, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeAutomorphMrp(dst, src1, 5, base3, bad, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeRotAutomorphCoeffMrp(dst, src1, 1, base3, bad, nullptr) ==
+                HAZE_ERROR_INVALID_VALUE);
+
+        // Memory MRP: base_len is the residue count (hostile); `count` here is
+        // the legitimate per-residue byte size and stays valid.
+        REQUIRE(hazeMemcpyMrp(dst, src1, 32768, HAZE_MEMCPY_DEVICE_TO_DEVICE, base3, bad) ==
+                HAZE_ERROR_INVALID_VALUE);
+
+        // Basis conversion: a hostile length in either the source or the
+        // destination base must be rejected.
+        const hazeBasisConvertParams bc_src{base3, bad, base3, 3};
+        REQUIRE(hazeBasisConvert(dst, src1, &bc_src, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        const hazeBasisConvertParams bc_dst{base3, 3, base3, bad};
+        REQUIRE(hazeBasisConvert(dst, src1, &bc_dst, nullptr) == HAZE_ERROR_INVALID_VALUE);
+
+        // Mod-down: hostile source or rescale base length.
+        const hazeModDownParams md_src{base3, bad, base3, 1};
+        REQUIRE(hazeModDown(dst, src1, &md_src, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        const hazeModDownParams md_rescale{base3, 3, base3, bad};
+        REQUIRE(hazeModDown(dst, src1, &md_rescale, nullptr) == HAZE_ERROR_INVALID_VALUE);
+
+        // Mod-up: hostile digit_count (the pre-fix crash walked digit_base_lens)
+        // and hostile src_base_len / p_base_len all rejected before the loop.
+        const hazeModUpParams mu_digits{base3, 3, base3, 3, digit_lens3, bad, base3, 3};
+        REQUIRE(hazeModUp(dst, src1, &mu_digits, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        const hazeModUpParams mu_src{base3, bad, base3, 3, digit_lens3, 3, base3, 3};
+        REQUIRE(hazeModUp(dst, src1, &mu_src, nullptr) == HAZE_ERROR_INVALID_VALUE);
+
+        (void)hazeGetLastError();
+    }
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+// ---------------------------------------------------------------------------
+// P7-ABI-01 boundary regression: prove the cap is inclusive at 64 and rejects
+// at 65 / SIZE_MAX, so the fix hardens the overflow path without shrinking the
+// legitimate device modulus envelope. The MRP allocator path is self-contained
+// (a configured ring dimension is its only prerequisite), giving an
+// unambiguous accept/reject signal driven solely by the count bound.
+// ---------------------------------------------------------------------------
+TEST_CASE("P7-ABI-01: the modulus-count bound accepts 64 and rejects 65 and SIZE_MAX", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    constexpr std::size_t kPolyBytes = static_cast<std::size_t>(4096) * sizeof(uint64_t);
+
+    // 64 == kMaxCiphertextModuli: a legal MRP group size. The cap is strictly
+    // '>', so the boundary allocation succeeds and yields 64 live addresses.
+    std::array<void *, 64> ptrs64{};
+    REQUIRE(hazeMallocMrp(ptrs64.data(), ptrs64.size(), kPolyBytes) == HAZE_SUCCESS);
+    for (void *p : ptrs64)
+        REQUIRE(p != nullptr);
+    REQUIRE(hazeFreeMrp(ptrs64.data(), ptrs64.size()) == HAZE_SUCCESS);
+
+    // 65 and SIZE_MAX are over the envelope: rejected before any reservation,
+    // and the output array is left untouched (no partial writes on rejection).
+    void *out = nullptr;
+    REQUIRE(hazeMallocMrp(&out, 65, kPolyBytes) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(out == nullptr);
+    REQUIRE(hazeMallocMrp(&out, SIZE_MAX, kPolyBytes) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(out == nullptr);
+    (void)hazeGetLastError();
+
+    // The free path enforces the same bound.
+    REQUIRE(hazeFreeMrp(&out, 65) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeFreeMrp(&out, SIZE_MAX) == HAZE_ERROR_INVALID_VALUE);
+    (void)hazeGetLastError();
+
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
