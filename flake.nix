@@ -75,6 +75,8 @@
           jujutsu
           clang-tools
           nixfmt
+          gbenchmark # Google Benchmark (P1b): find_package(benchmark CONFIG REQUIRED)
+          lcov # optional (P2c): genhtml HTML coverage rendering
         ];
 
       # Three-derivation hermetic build: openfhe → niobium-fhetch → haze, each

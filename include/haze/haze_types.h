@@ -196,4 +196,29 @@ typedef struct {
     size_t p_base_len;
 } hazeModUpParams;
 
+// Snapshot of runtime performance counters returned by
+// hazeGetPerformanceCounters. All values are cumulative since process
+// start or the most recent hazeDeviceReset(). Byte counts are in bytes;
+// flush timings are in nanoseconds.
+//
+// Counting model:
+//   - op_count is incremented exactly once per high-level compute operation
+//     (each SRP arithmetic op, each MRP arithmetic op, and each basis-convert
+//     API call counts as one, independent of how many residues the op fans out
+//     to internally). It does NOT count device-to-device copies.
+//   - Data-movement copies are accounted only in the byte counters:
+//     host-to-device in bytes_h2d, device-to-host in bytes_d2h, and
+//     device-to-device in bytes_d2d (never in op_count).
+//   - Every counter is monotonic and saturates at UINT64_MAX rather than
+//     wrapping, so a reported value is always a truthful lower bound.
+typedef struct {
+    uint64_t op_count;            // high-level ops (one per SRP/MRP/basis-convert call)
+    uint64_t bytes_h2d;           // cumulative host-to-device bytes moved
+    uint64_t bytes_d2h;           // cumulative device-to-host bytes moved
+    uint64_t bytes_d2d;           // cumulative device-to-device bytes moved
+    uint64_t flush_count;         // number of hazeFlush() replay invocations
+    uint64_t flush_time_ns_total; // cumulative flush/replay wall time (nanoseconds)
+    uint64_t flush_time_ns_last;  // most-recent flush/replay wall time (nanoseconds)
+} hazePerformanceCounters;
+
 #endif /* HAZE_TYPES_H */

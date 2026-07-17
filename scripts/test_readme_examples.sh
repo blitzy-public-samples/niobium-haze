@@ -12,6 +12,9 @@
 # it through the in-process FHETCH simulator (HAZE_TARGET=local), and asserts
 # exit 0 plus the expected output token. It fails loudly if a marker region is
 # missing or a compile/run/assert fails, so the published code cannot rot.
+# It also verifies the migrated examples/quickstart.c and examples/ckks22.cpp
+# match their README marker regions byte-for-byte (README is the source of
+# truth), failing loudly on drift so examples/ cannot diverge from the docs.
 #
 # Resolves the repo root from `git rev-parse` (falls back to the script's
 # `$(dirname BASH_SOURCE)/..` outside a git checkout, e.g. inside a nix
@@ -30,6 +33,8 @@
 #                            program_dir stays out of the source root (default:
 #                            $root/$BUILD_DIR/runs).
 #   CC / CXX                 compilers (default: cc / c++).
+#   EXAMPLES_DIR             dir holding the migrated runnable examples
+#                            (default: $root/examples).
 
 set -euo pipefail
 
@@ -61,6 +66,7 @@ stock_openfhe_dir="${STOCK_OPENFHE_DIR:-$root/vendor/lib/openfhe-stock}"
 runs_dir="${HAZE_RUNS_DIR:-$root/$build_dir/runs}"
 cc="${CC:-cc}"
 cxx="${CXX:-c++}"
+examples_dir="${EXAMPLES_DIR:-$root/examples}"
 
 [[ -f "$readme" ]] || {
     printf 'error: README not found: %s\n' "$readme" >&2
@@ -96,8 +102,53 @@ extract_to() {
     }
 }
 
+# Emit a unified diff with human-readable labels in a portable way. diff(1)
+# label support is not uniform: GNU diff accepts both --label and -L, but the
+# BSD/macOS diff this script must also run under does not accept the --label
+# long option. Feature-detect -L support once (the portable short spelling that
+# GNU and BSD share) and fall back to a plain unified diff -- whose headers show
+# the raw file paths -- when even -L is unavailable, so the mirror check reports
+# drift identically everywhere instead of aborting on an unknown option.
+_diff_labels_supported=""
+mirror_diff() {
+    local left_label="$1" right_label="$2" left_file="$3" right_file="$4"
+    if [[ -z "$_diff_labels_supported" ]]; then
+        if diff -u -L x -L y /dev/null /dev/null >/dev/null 2>&1; then
+            _diff_labels_supported=yes
+        else
+            _diff_labels_supported=no
+        fi
+    fi
+    if [[ "$_diff_labels_supported" == yes ]]; then
+        diff -u -L "$left_label" -L "$right_label" "$left_file" "$right_file"
+    else
+        diff -u "$left_file" "$right_file"
+    fi
+}
+
+# Assert a migrated examples/ file matches its authoritative README region
+# byte-for-byte. The README marker regions are the source of truth; a drift
+# here means examples/ fell out of sync and must be regenerated from README.
+check_mirror() {
+    local extracted="$1" mirror="$2" name="$3"
+    if [[ ! -f "$mirror" ]]; then
+        printf 'error: examples file missing: %s (must mirror README region name=%s)\n' \
+            "$mirror" "$name" >&2
+        exit 1
+    fi
+    if ! mirror_diff "README:name=$name" "$mirror" "$extracted" "$mirror"; then
+        printf 'error: %s drifted from README region name=%s (README is the source of truth; regenerate examples/ from the README markers)\n' \
+            "$mirror" "$name" >&2
+        exit 1
+    fi
+}
+
 extract_to quickstart "$scratch/quickstart.c"
 extract_to ckks22 "$scratch/ckks22.cpp"
+
+printf '[readme] verifying examples/ mirror the README regions (README is source of truth)\n'
+check_mirror "$scratch/quickstart.c" "$examples_dir/quickstart.c" quickstart
+check_mirror "$scratch/ckks22.cpp"   "$examples_dir/ckks22.cpp"   ckks22
 
 printf '[readme] compiling C example (quickstart.c)\n'
 "$cc" -std=c11 -O2 \

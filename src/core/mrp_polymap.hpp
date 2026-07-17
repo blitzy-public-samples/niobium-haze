@@ -48,10 +48,9 @@ std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const 
                                                         std::size_t count,
                                                         std::size_t len) noexcept;
 
-std::expected<void, HazeInternalError> copy_device_to_device_mrp(void *const *dst,
-                                                                 const void *const *src,
-                                                                 const uint64_t *base,
-                                                                 std::size_t len) noexcept;
+std::expected<void, HazeInternalError>
+copy_device_to_device_mrp(void *const *dst, const void *const *src, std::size_t count,
+                          const uint64_t *base, std::size_t len) noexcept;
 
 // Build an MRS from per-modulus uint64_t scalars + their primes. Pure-data
 // helper: does not touch the polymap, so no lock contract.

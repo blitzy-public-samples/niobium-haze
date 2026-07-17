@@ -32,7 +32,8 @@ extern "C" hazeError_t hazeStreamCreateWithPriority(hazeStream_t *stream, unsign
 }
 
 extern "C" hazeError_t hazeStreamDestroy(hazeStream_t stream) noexcept {
-    haze::stream_destroy(stream);
+    if (!haze::stream_destroy(stream))
+        return set_error(HAZE_ERROR_INVALID_VALUE);
     return HAZE_SUCCESS;
 }
 
@@ -60,7 +61,8 @@ extern "C" hazeError_t hazeEventCreateWithFlags(hazeEvent_t *event,
 }
 
 extern "C" hazeError_t hazeEventDestroy(hazeEvent_t event) noexcept {
-    haze::event_destroy(event);
+    if (!haze::event_destroy(event))
+        return set_error(HAZE_ERROR_INVALID_VALUE);
     return HAZE_SUCCESS;
 }
 

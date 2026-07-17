@@ -19,12 +19,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <haze/haze_types.h>
 #include <niobium/fhetch_api.h>
 #include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace haze {
@@ -32,6 +34,68 @@ namespace haze {
 // fhetch's copy sentinel (TraceWriter COPY_MODULUS_VALUE); doubles as the
 // "modulus unknown" marker for the addr->modulus tracking below.
 inline constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
+
+// One residue of a captured input, in trace-encounter order. `addr_id` is the
+// FHETCH synthetic address the recorded trace references for this residue; it
+// is stable across replays because the epoch resets the FHETCH allocator per
+// replay (position-based ids). `refreshable` inputs are live-in HAZE device
+// operands whose current shadow is re-read at every launch (the record-once /
+// replay-many-with-CURRENT-inputs contract); non-refreshable residues are
+// auxiliary captures (e.g. derived / precompute data with no HAZE shadow) that
+// keep their recorded values.
+struct SnapshotInputResidue {
+    uint64_t addr_id = 0;
+    uint64_t modulus = 0;
+    bool starts_new_element = false;       // SRPArray / MRPArray element boundary
+    bool refreshable = false;              // re-read refresh_addr's shadow each launch
+    DevAddr refresh_addr{};                // live-in device address (valid iff refreshable)
+    std::vector<uint64_t> recorded_values; // fallback for non-refreshable residues
+};
+
+// One captured input record (one distinct FHETCH tag_input name), grouping its
+// residues so replay repopulates the compiler's captured_inputs with the same
+// shape recorded at capture time.
+struct SnapshotInput {
+    std::string name;
+    uint8_t kind = 0; // niobium::CapturedKind (SRP/MRP/SRPArray/MRPArray)
+    std::vector<SnapshotInputResidue> residues;
+};
+
+// Self-contained, copyable handle to a captured epoch trace. Owns a
+// graph-private on-disk project directory (.fhetch + inputs + templates +
+// cryptocontext) plus the input-binding table replayed against CURRENT operand
+// shadows on every launch. Produced by EpochState::end_capture_snapshot_locked;
+// consumed by EpochState::replay_snapshot_locked.
+//
+// Capture-only contract: end_capture_snapshot_locked writes and copies the
+// project but does NOT execute it. Each replay_snapshot_locked re-dispatches
+// the persisted project from disk, so the snapshot carries no pre-computed
+// output values — the values are produced fresh on every launch. This keeps
+// hazeFlush / hazeGraphLaunch the sole materialization triggers.
+struct EpochTraceSnapshot {
+    std::filesystem::path project_dir;                    // graph-owned copy
+    std::vector<std::pair<DevAddr, std::string>> outputs; // addr -> probe name
+    // Allocator generation of each output address at capture time,
+    // index-parallel to `outputs`. Each launch verifies the address still
+    // holds that generation before repopulating its shadow, so a freed +
+    // recycled DevAddr (the allocator reuses freed addresses via its pool)
+    // cannot be silently clobbered by a stale graph's replay.
+    std::vector<uint64_t> output_generations;
+    std::string target; // replay target
+    // Recorded input bindings, in trace-encounter order. On every launch the
+    // recorded FHETCH op-sequence is re-dispatched through the simulator with
+    // these inputs re-read from their live device shadows, so overwriting an
+    // operand at a stable DevAddr and relaunching yields the NEW result — not a
+    // value cached once at EndCapture.
+    std::vector<SnapshotInput> inputs;
+    // Structural signature of the recorded op-sequence: an FNV-1a hash over the
+    // non-comment instruction lines of the .fhetch trace. Two captures with the
+    // same operations and operand positions (a pure input rebind) hash equal;
+    // a different operation (e.g. multiply vs add) hashes differently. Used by
+    // graph_exec_update to reject an operation-topology mismatch that an
+    // output-address-only check would silently accept.
+    uint64_t trace_signature = 0;
+};
 
 // Singleton tracking the polymap, pending outputs, and recording flag for
 // the active epoch; replay_and_populate() drains it at flush time. Public
@@ -67,6 +131,12 @@ class EpochState {
     std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
     void reset() noexcept HAZE_EXCLUDES(mutex_);
+
+    // True iff an epoch is currently recording. Read-only lifecycle-state
+    // introspection backing the observability readiness surface
+    // (haze::runtime_readiness()); takes and releases mutex_ on its own. Not
+    // const because it acquires the (non-mutable) epoch mutex.
+    bool is_recording() noexcept HAZE_EXCLUDES(mutex_);
 
     // ---- Locked methods (caller holds mutex_) ----
 
@@ -138,6 +208,26 @@ class EpochState {
     // / "haze_mrp_out_N"): same leading addr -> same name within an epoch;
     // invalidate() drops it so a recycled allocation gets a fresh name.
     std::string mrp_group_name_locked(bool output, DevAddr leading) HAZE_REQUIRES(mutex_);
+
+    // Enter graph-capture mode: open a recording (via ensure_recording_locked)
+    // and set capturing_. Rejects a nested begin (a capture already active)
+    // with InvalidArgument and leaves the in-progress capture intact.
+    std::expected<void, HazeInternalError> begin_capture_locked() noexcept HAZE_REQUIRES(mutex_);
+
+    // Finalize the open recording to an on-disk project dir, copy it to a
+    // graph-private unique directory, record the output binding table, clear
+    // epoch state, and leave capture mode. Returns the populated snapshot.
+    std::expected<EpochTraceSnapshot, HazeInternalError> end_capture_snapshot_locked() noexcept
+        HAZE_REQUIRES(mutex_);
+
+    // Re-dispatch a captured snapshot: replay its on-disk project and
+    // repopulate each output DevAddr's shadow. Repeatable; preserves the
+    // epoch -> allocator lock order (update_shadow runs under mutex_).
+    std::expected<void, HazeInternalError>
+    replay_snapshot_locked(const EpochTraceSnapshot &snapshot) noexcept HAZE_REQUIRES(mutex_);
+
+    // True while a graph-capture region (begin_capture..end_capture) is active.
+    bool capturing_locked() const noexcept HAZE_REQUIRES(mutex_);
 
     EpochState(const EpochState &) = delete;
     EpochState &operator=(const EpochState &) = delete;
@@ -216,6 +306,9 @@ class EpochState {
     uint64_t input_counter_ HAZE_GUARDED_BY(mutex_) = 0;
     uint64_t output_counter_ HAZE_GUARDED_BY(mutex_) = 0;
     bool recording_ HAZE_GUARDED_BY(mutex_) = false;
+    // Set between begin_capture_locked and end_capture_snapshot_locked; keeps
+    // finalize_locked from clearing epoch state mid-capture.
+    bool capturing_ HAZE_GUARDED_BY(mutex_) = false;
 
     // Friend so EpochSession's ACQUIRE/RELEASE attributes can name mutex_.
     friend class EpochSession;
@@ -275,5 +368,18 @@ std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAdd
 // H2D-time eager-tag: register the H2D'd buffer at `addr` as a fhetch input
 // (EpochState::tag_h2d_input_locked).
 std::expected<void, HazeInternalError> tag_h2d_input(DevAddr addr) noexcept;
+
+// Securely clone an on-disk project directory into a fresh, exclusively-created
+// owner-only (0700) directory under the system temp path, returning the new
+// path. The destination is created atomically with a randomized name (no
+// predictable-name pre-creation race and no overwrite of an existing tree), and
+// every copied entry is re-permissioned to owner-only so captured FHE material
+// is never world-readable. On any failure the partial destination is removed
+// before returning the error. Non-throwing: all filesystem work uses the
+// std::error_code overloads or is guarded, so it is safe to call from the
+// noexcept graph shims. Shared by end_capture_snapshot_locked (program dir ->
+// graph-owned copy) and the graph module (graph copy -> exec-owned copy).
+std::expected<std::filesystem::path, HazeInternalError>
+secure_clone_project_dir(const std::filesystem::path &src) noexcept;
 
 } // namespace haze

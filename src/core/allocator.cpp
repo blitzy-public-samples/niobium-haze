@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
+#include "core/metrics.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -90,8 +91,14 @@ std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate_one_locked()
                                   "DeviceAllocator::allocate (recycled addr already live)");
             return std::unexpected(HazeInternalError::PoolMapDesync);
         }
-        // Re-establish liveness for the recycled addr.
+        // Re-establish liveness for the recycled addr. Stamp a fresh,
+        // strictly-increasing generation: even though this DevAddr value was
+        // handed out before, this is a NEW lifetime. A captured graph snapshot
+        // that recorded the prior generation will therefore fail its
+        // generation check on replay rather than silently aliasing the new
+        // allocation (ABA defense — see generation_of()).
         alloc_set_.insert(addr);
+        addr_generation_[addr] = ++alloc_generation_;
         return addr;
     }
 
@@ -101,6 +108,8 @@ std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate_one_locked()
     DevAddr addr{next_addr_};
     next_addr_ += poly_bytes_;
     alloc_set_.insert(addr);
+    // Stamp a fresh, strictly-increasing generation for this new lifetime.
+    addr_generation_[addr] = ++alloc_generation_;
     return addr;
 }
 
@@ -116,8 +125,24 @@ std::expected<void, HazeInternalError> DeviceAllocator::free_one_locked(DevAddr 
     // DevAddr for the next allocate() to recycle.
     alloc_set_.erase(addr);
     shadow_data_.erase(addr);
+    // Drop the generation stamp: the lifetime is over. A later allocate() that
+    // recycles this DevAddr from pool_free_ will assign a NEW generation, so
+    // any snapshot holding the old generation can no longer match it.
+    addr_generation_.erase(addr);
     pool_free_.push_back(addr);
     return {};
+}
+
+uint64_t DeviceAllocator::generation_of(DevAddr addr) const noexcept {
+    HazeLockGuard lock(mutex_);
+    // Generation 0 is reserved as "no live allocation" — it is never assigned
+    // to a real allocation (alloc_generation_ is pre-incremented from 0), so a
+    // returned 0 unambiguously means "this DevAddr is not currently live".
+    auto it = addr_generation_.find(addr);
+    if (it == addr_generation_.end()) {
+        return 0;
+    }
+    return it->second;
 }
 
 std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate(size_t bytes) noexcept {
@@ -278,6 +303,7 @@ std::expected<void, HazeInternalError> DeviceAllocator::copy_h2d(DevAddr dst, co
         shadow.assign(want_elems, uint64_t{0});
     }
     std::memcpy(reinterpret_cast<uint8_t *>(shadow.data()), src, count);
+    metrics().add_bytes_h2d(count);
     return {};
 }
 
@@ -316,6 +342,7 @@ std::expected<void, HazeInternalError> DeviceAllocator::copy_to_host(void *dst, 
         return std::unexpected(HazeInternalError::OutputNotFlushed);
     }
     std::memcpy(dst, reinterpret_cast<const uint8_t *>(data_it->second.data()), count);
+    metrics().add_bytes_d2h(count);
     return {};
 }
 
@@ -382,11 +409,12 @@ void DeviceAllocator::register_host_pointer(const void *ptr) noexcept {
     }
 }
 
-void DeviceAllocator::unregister_host_pointer(const void *ptr) noexcept {
-    if (ptr != nullptr) {
-        HazeLockGuard lock(mutex_);
-        host_set_.erase(ptr);
+bool DeviceAllocator::unregister_host_pointer(const void *ptr) noexcept {
+    if (ptr == nullptr) {
+        return false;
     }
+    HazeLockGuard lock(mutex_);
+    return host_set_.erase(ptr) > 0;
 }
 
 void DeviceAllocator::reset() noexcept {
@@ -395,8 +423,13 @@ void DeviceAllocator::reset() noexcept {
     shadow_data_.clear();
     pool_free_.clear();
     host_set_.clear();
+    addr_generation_.clear();
     next_addr_ = kHbmBase;
     poly_bytes_ = 0;
+    // NOTE: alloc_generation_ is deliberately NOT reset here. Keeping the
+    // generation counter strictly monotonic across device resets guarantees a
+    // stale snapshot generation can never be matched by a post-reset
+    // allocation, even for the recycled base DevAddr (kHbmBase).
 }
 
 } // namespace haze

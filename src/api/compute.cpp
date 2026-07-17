@@ -19,6 +19,7 @@
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
+#include "core/device.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -117,7 +118,8 @@ extern "C" hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
 extern "C" hazeError_t hazeAddMrp(void *const *dst, const void *const *src1,
                                   const void *const *src2, const uint64_t *base, size_t base_len,
                                   hazeStream_t /*stream*/) noexcept {
-    if (dst == nullptr || src1 == nullptr || src2 == nullptr || base == nullptr || base_len == 0)
+    if (dst == nullptr || src1 == nullptr || src2 == nullptr || base == nullptr || base_len == 0 ||
+        base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(
         haze::binary_pp_op_mrp<fhetch::mr_addp>(dst, src1, src2, base, base_len));
@@ -126,7 +128,8 @@ extern "C" hazeError_t hazeAddMrp(void *const *dst, const void *const *src1,
 extern "C" hazeError_t hazeSubMrp(void *const *dst, const void *const *src1,
                                   const void *const *src2, const uint64_t *base, size_t base_len,
                                   hazeStream_t /*stream*/) noexcept {
-    if (dst == nullptr || src1 == nullptr || src2 == nullptr || base == nullptr || base_len == 0)
+    if (dst == nullptr || src1 == nullptr || src2 == nullptr || base == nullptr || base_len == 0 ||
+        base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(
         haze::binary_pp_op_mrp<fhetch::mr_subp>(dst, src1, src2, base, base_len));
@@ -135,7 +138,8 @@ extern "C" hazeError_t hazeSubMrp(void *const *dst, const void *const *src1,
 extern "C" hazeError_t hazeMulMrp(void *const *dst, const void *const *src1,
                                   const void *const *src2, const uint64_t *base, size_t base_len,
                                   hazeStream_t /*stream*/) noexcept {
-    if (dst == nullptr || src1 == nullptr || src2 == nullptr || base == nullptr || base_len == 0)
+    if (dst == nullptr || src1 == nullptr || src2 == nullptr || base == nullptr || base_len == 0 ||
+        base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(
         haze::binary_pp_op_mrp<fhetch::mr_mulp>(dst, src1, src2, base, base_len));
@@ -144,7 +148,8 @@ extern "C" hazeError_t hazeMulMrp(void *const *dst, const void *const *src1,
 extern "C" hazeError_t hazeAddScalarMrp(void *const *dst, const void *const *src,
                                         const uint64_t *scalars, const uint64_t *base,
                                         size_t base_len, hazeStream_t /*stream*/) noexcept {
-    if (dst == nullptr || src == nullptr || scalars == nullptr || base == nullptr || base_len == 0)
+    if (dst == nullptr || src == nullptr || scalars == nullptr || base == nullptr ||
+        base_len == 0 || base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(
         haze::binary_ps_op_mrp<fhetch::mr_addps>(dst, src, scalars, base, base_len));
@@ -153,7 +158,8 @@ extern "C" hazeError_t hazeAddScalarMrp(void *const *dst, const void *const *src
 extern "C" hazeError_t hazeSubScalarMrp(void *const *dst, const void *const *src,
                                         const uint64_t *scalars, const uint64_t *base,
                                         size_t base_len, hazeStream_t /*stream*/) noexcept {
-    if (dst == nullptr || src == nullptr || scalars == nullptr || base == nullptr || base_len == 0)
+    if (dst == nullptr || src == nullptr || scalars == nullptr || base == nullptr ||
+        base_len == 0 || base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(
         haze::binary_ps_op_mrp<fhetch::mr_subps>(dst, src, scalars, base, base_len));
@@ -162,7 +168,8 @@ extern "C" hazeError_t hazeSubScalarMrp(void *const *dst, const void *const *src
 extern "C" hazeError_t hazeMulScalarMrp(void *const *dst, const void *const *src,
                                         const uint64_t *scalars, const uint64_t *base,
                                         size_t base_len, hazeStream_t /*stream*/) noexcept {
-    if (dst == nullptr || src == nullptr || scalars == nullptr || base == nullptr || base_len == 0)
+    if (dst == nullptr || src == nullptr || scalars == nullptr || base == nullptr ||
+        base_len == 0 || base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(
         haze::binary_ps_op_mrp<fhetch::mr_mulps>(dst, src, scalars, base, base_len));
@@ -170,14 +177,16 @@ extern "C" hazeError_t hazeMulScalarMrp(void *const *dst, const void *const *src
 
 extern "C" hazeError_t hazeNTTMrp(void *const *dst, const void *const *src, const uint64_t *base,
                                   size_t base_len, hazeStream_t /*stream*/) noexcept {
-    if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
+    if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0 ||
+        base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(haze::unary_p_op_mrp<fhetch::mr_ntt>(dst, src, base, base_len));
 }
 
 extern "C" hazeError_t hazeINTTMrp(void *const *dst, const void *const *src, const uint64_t *base,
                                    size_t base_len, hazeStream_t /*stream*/) noexcept {
-    if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
+    if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0 ||
+        base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(haze::unary_p_op_mrp<fhetch::mr_intt>(dst, src, base, base_len));
 }
@@ -185,7 +194,8 @@ extern "C" hazeError_t hazeINTTMrp(void *const *dst, const void *const *src, con
 extern "C" hazeError_t hazeAutomorphMrp(void *const *dst, const void *const *src, uint64_t index,
                                         const uint64_t *base, size_t base_len,
                                         hazeStream_t /*stream*/) noexcept {
-    if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
+    if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0 ||
+        base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(
         haze::unary_pi_op_mrp<fhetch::mr_automorph_eval>(dst, src, index, base, base_len));
@@ -194,7 +204,8 @@ extern "C" hazeError_t hazeAutomorphMrp(void *const *dst, const void *const *src
 extern "C" hazeError_t hazeRotAutomorphCoeffMrp(void *const *dst, const void *const *src,
                                                 uint64_t offset, const uint64_t *base,
                                                 size_t base_len, hazeStream_t /*stream*/) noexcept {
-    if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
+    if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0 ||
+        base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(
         haze::unary_pi_op_mrp<fhetch::mr_rot_automorph_coeff>(dst, src, offset, base, base_len));

@@ -15,7 +15,9 @@
 
 #include "common/errors.hpp"
 #include "core/config.hpp"
+#include "core/device.hpp"
 #include "core/epoch.hpp"
+#include "core/metrics.hpp"
 #include "core/mrp_polymap.hpp"
 
 #include <cstddef>
@@ -53,6 +55,16 @@ std::expected<void, HazeInternalError> validate(const hazeBasisConvertParams &p)
                               "hazeBasisConvert: empty or null base");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
+    // P7-ABI-01: reject hostile base lengths before build_mrp_locked's reserve()
+    // and the ModuliBase pointer arithmetic below. Every RNS base is bounded by
+    // the device modulus envelope; an unbounded length would throw
+    // std::length_error (aborting across the C ABI) or overflow a pointer.
+    if (p.src_base_len > static_cast<size_t>(kMaxCiphertextModuli) ||
+        p.dst_base_len > static_cast<size_t>(kMaxCiphertextModuli)) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "hazeBasisConvert: base length exceeds supported maximum");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
     return {};
 }
 
@@ -61,6 +73,16 @@ std::expected<void, HazeInternalError> validate(const hazeModDownParams &p) noex
         p.rescale_base_len == 0) {
         record_internal_error(HazeInternalError::InvalidArgument,
                               "hazeModDown: empty or null base");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
+    // P7-ABI-01: reject hostile base lengths before the src_set construction
+    // below (std::unordered_set(src_base, src_base + src_base_len) overflows the
+    // iterator range on an unbounded src_base_len) and before build_mrp_locked's
+    // reserve(). Every RNS base is bounded by the device modulus envelope.
+    if (p.src_base_len > static_cast<size_t>(kMaxCiphertextModuli) ||
+        p.rescale_base_len > static_cast<size_t>(kMaxCiphertextModuli)) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "hazeModDown: base length exceeds supported maximum");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
     // rescale_base must be a *proper* subset of src_base — equal-length
@@ -91,11 +113,29 @@ std::expected<void, HazeInternalError> validate(const hazeModUpParams &p) noexce
         record_internal_error(HazeInternalError::InvalidArgument, "hazeModUp: empty or null base");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
+    // P7-ABI-01: reject hostile counts before the digit_base_lens[i] loop below
+    // (an unbounded digit_count reads past the array — the ASan stack-buffer
+    // overflow) and before mod_up's reserve()/pointer slicing. Every RNS base
+    // and the digit count are bounded by the device modulus envelope.
+    if (p.src_base_len > static_cast<size_t>(kMaxCiphertextModuli) ||
+        p.p_base_len > static_cast<size_t>(kMaxCiphertextModuli) ||
+        p.digit_count > static_cast<size_t>(kMaxCiphertextModuli)) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "hazeModUp: base length or digit count exceeds supported maximum");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
     // digit_bases is a flat concatenation; the per-digit lengths must sum
     // to digit_bases_total_len. Catch caller miscounts before slicing
-    // out-of-bounds.
+    // out-of-bounds. Each per-digit length is likewise bounded by the device
+    // modulus envelope, so the running sum cannot overflow (P7-ABI-01) and the
+    // later emplace_back(digit_bases + offset, + dlen) never overflows a pointer.
     size_t sum = 0;
     for (size_t i = 0; i < p.digit_count; ++i) {
+        if (p.digit_base_lens[i] > static_cast<size_t>(kMaxCiphertextModuli)) {
+            record_internal_error(HazeInternalError::InvalidArgument,
+                                  "hazeModUp: per-digit base length exceeds supported maximum");
+            return std::unexpected(HazeInternalError::InvalidArgument);
+        }
         sum += p.digit_base_lens[i];
     }
     if (sum != p.digit_bases_total_len) {
@@ -130,7 +170,13 @@ std::expected<void, HazeInternalError> basis_convert(void *const *dst, const voi
     // byte-for-byte; with reduced_noise on it tracks the centered variant automatically.
     fhetch::MRP result =
         fhetch::fast_base_convert(*src_mrp, target_base, fbc_variant(), fbc_center_shape());
-    return store_mrp_locked(dst, result, p.dst_base, p.dst_base_len);
+    auto stored = store_mrp_locked(dst, result, p.dst_base, p.dst_base_len);
+    if (!stored)
+        return stored;
+    // One high-level basis-convert op emitted, counted once regardless of
+    // residue fan-out; reached only on the success path (M1).
+    metrics().add_op();
+    return {};
 }
 
 std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *const *src,
@@ -153,7 +199,13 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
     // order. Use it directly so HAZE-side and backend-side never disagree
     // on the dst layout.
     const auto &dst_base = result.base();
-    return store_mrp_locked(dst, result, dst_base.data(), dst_base.size());
+    auto stored = store_mrp_locked(dst, result, dst_base.data(), dst_base.size());
+    if (!stored)
+        return stored;
+    // One high-level mod-down op emitted, counted once regardless of residue
+    // fan-out; reached only on the success path (M1).
+    metrics().add_op();
+    return {};
 }
 
 std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *const *src,
@@ -198,6 +250,9 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
         if (!stored)
             return stored;
     }
+    // One high-level mod-up op emitted per API call, counted once regardless of
+    // digit/residue fan-out; reached only after every digit stored (M1).
+    metrics().add_op();
     return {};
 }
 

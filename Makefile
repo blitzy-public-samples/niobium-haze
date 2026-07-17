@@ -2,11 +2,11 @@
 # Haze — standalone build entry
 # ==============================================================================
 # Build directory convention: dbuild/ for MODE=debug, build/ for MODE=release.
-# All targets honour MODE; defaults to release. See `make help`.
+# All targets honour MODE; defaults to debug. See `make help`.
 #
 # Override knobs (parent or user can supply):
 #   MODE                     debug | release. Selects build dir (dbuild|build)
-#                            and CMake config (Debug|Release). Default: release.
+#                            and CMake config (Debug|Release). Default: debug.
 #   NUM_CPUS                 Build parallelism. Auto-detected from sysctl/nproc;
 #                            override to throttle.
 #   NIOBIUM_HAZE_FHETCH_DIR  External niobium-fhetch source tree to use instead
@@ -126,7 +126,7 @@ HAZE_RUNS_DIR = $(CURDIR)/$(BUILD_DIR)/runs
 # ==============================================================================
 
 .PHONY: help sync \
-        config build \
+        config build bench coverage \
         config-openfhe build-openfhe \
         config-test-openfhe build-test-openfhe \
         test-unit test-sim test-e2e test-readme test-transport test-isolation test test-all \
@@ -141,8 +141,13 @@ define HAZE_HELP_TEXT
 Usage: make <target> [MODE=debug|release]
 
   Build:
-    config              Configure haze (uses MODE; default: release)
+    config              Configure haze (uses MODE; default: debug)
     build               Build haze
+    bench               Build + run the Google Benchmark suite (MODE=release
+                        recommended); writes JSON and prints how to refresh
+                        benchmark/baseline.json
+    coverage            Build instrumented, run tests, emit coverage report +
+                        80% line-coverage gate on src/core + src/api (P2c)
     config-openfhe      Configure OpenFHE
     build-openfhe       Build and install OpenFHE locally
     config-test-openfhe Configure the stock OpenFHE (for haze_e2e_tests)
@@ -261,11 +266,74 @@ config: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Configure haze (uses 
 		-DOPENFHE_INSTALL_DIR="$(OPENFHE_INSTALL_DIR)" \
 		-DHAZE_BUILD_E2E_TESTS=$(HAZE_BUILD_E2E_TESTS) \
 		-DHAZE_TEST_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
+		-DHAZE_COVERAGE=OFF \
+		-DHAZE_BUILD_BENCHMARKS=OFF \
 		$(CMAKE_FHETCH_DIR_FLAG) \
 		$(CMAKE_JSON_INCLUDE_DIR_FLAG)
 
 build: config ## Build haze (uses MODE)
 	cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --config $(CMAKE_CONFIG)
+
+# ==============================================================================
+# Haze Benchmarks (opt-in; Google Benchmark) — P1b
+# ==============================================================================
+
+# Google Benchmark JSON output path. The regression baseline lives at
+# benchmark/baseline.json; refresh it from a run on a documented, stable
+# environment (MODE=release, quiet machine) rather than editing it by hand.
+HAZE_BENCH_OUT ?= $(CURDIR)/$(BUILD_DIR)/benchmark_results.json
+
+# Configure the SAME build dir as `config` but with the benchmark harness turned
+# on (a separate executable linking the shipped libhaze.so; libhaze itself is
+# unchanged), build only haze_benchmarks, then run it from the runs dir so the
+# in-process FHETCH simulator resolves program_dir under $(BUILD_DIR). MODE=release
+# is strongly recommended for meaningful numbers; the default MODE still works.
+bench: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Build + run the Google Benchmark suite and emit JSON
+	cmake -S "$(CURDIR)" -B "$(CURDIR)/$(BUILD_DIR)" \
+		-DCMAKE_BUILD_TYPE=$(CMAKE_CONFIG) \
+		-DOPENFHE_INSTALL_DIR="$(OPENFHE_INSTALL_DIR)" \
+		-DHAZE_BUILD_E2E_TESTS=$(HAZE_BUILD_E2E_TESTS) \
+		-DHAZE_TEST_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
+		-DHAZE_BUILD_BENCHMARKS=ON \
+		-DHAZE_COVERAGE=OFF \
+		$(CMAKE_FHETCH_DIR_FLAG) \
+		$(CMAKE_JSON_INCLUDE_DIR_FLAG)
+	cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --config $(CMAKE_CONFIG) --target haze_benchmarks
+	@rm -rf "$(HAZE_RUNS_DIR)/haze"
+	@mkdir -p "$(HAZE_RUNS_DIR)"
+	@cd "$(HAZE_RUNS_DIR)" && \
+	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_benchmarks" \
+	    --benchmark_out="$(HAZE_BENCH_OUT)" --benchmark_out_format=json
+	@echo "benchmark JSON written to $(HAZE_BENCH_OUT)"
+	@echo "to refresh the regression baseline: cp '$(HAZE_BENCH_OUT)' benchmark/baseline.json"
+
+# ==============================================================================
+# Haze Coverage (opt-in; Clang source-based) — P2c
+# ==============================================================================
+
+# Configure the SAME build dir as `config` but instrumented for Clang
+# source-based coverage: -DHAZE_COVERAGE=ON enables -fprofile-instr-generate
+# -fcoverage-mapping. The option is OFF by default, so the shipped libhaze and
+# the default `make build` / `make test` flow stay byte-for-byte unaffected.
+# Build the full tree so the instrumented haze_tests exists, then hand off to
+# scripts/coverage.sh: it runs the tests to emit *.profraw, merges them with
+# llvm-profdata, exports an lcov tracefile scoped to src/core + src/api with
+# llvm-cov, and enforces the 80% line-coverage gate. llvm-cov / llvm-profdata
+# ship with the Clang 19 toolchain, so no extra runtime dependency is needed.
+# Honours MODE like every other target.
+coverage: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Build instrumented, run tests, emit coverage report + 80% line-coverage gate
+	cmake -S "$(CURDIR)" -B "$(CURDIR)/$(BUILD_DIR)" \
+		-DCMAKE_BUILD_TYPE=$(CMAKE_CONFIG) \
+		-DOPENFHE_INSTALL_DIR="$(OPENFHE_INSTALL_DIR)" \
+		-DHAZE_BUILD_E2E_TESTS=$(HAZE_BUILD_E2E_TESTS) \
+		-DHAZE_TEST_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
+		-DHAZE_COVERAGE=ON \
+		-DHAZE_BUILD_TESTS=ON \
+		-DHAZE_BUILD_BENCHMARKS=OFF \
+		$(CMAKE_FHETCH_DIR_FLAG) \
+		$(CMAKE_JSON_INCLUDE_DIR_FLAG)
+	cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --config $(CMAKE_CONFIG)
+	@BUILD_DIR="$(BUILD_DIR)" HAZE_RUNS_DIR="$(HAZE_RUNS_DIR)" scripts/coverage.sh
 
 # ==============================================================================
 # Haze Tests

@@ -160,7 +160,22 @@ class DeviceAllocator {
     // can report it as HOST. The set is keyed by raw void* — pointers
     // are unique because posix_memalign returns distinct addresses.
     void register_host_pointer(const void *ptr) noexcept HAZE_EXCLUDES(mutex_);
-    void unregister_host_pointer(const void *ptr) noexcept HAZE_EXCLUDES(mutex_);
+    // Drop a hazeHostAlloc tracking entry. Returns true iff the pointer was
+    // currently tracked (so the caller may free it), false for a null,
+    // foreign, or already-freed pointer. The membership test and erase happen
+    // under a single lock so the answer cannot race a concurrent free.
+    bool unregister_host_pointer(const void *ptr) noexcept HAZE_EXCLUDES(mutex_);
+
+    // Monotonic allocation generation for `addr`, or 0 if the address is not
+    // currently live. Every allocate() (fresh or recycled from the free list)
+    // stamps the returned DevAddr with a new, never-reused generation; free()
+    // drops the stamp. Because the allocator recycles freed DevAddrs, the
+    // address value alone cannot distinguish one allocation lifetime from the
+    // next — the generation does. Graph snapshots capture the generation of
+    // each tagged output so a launch can reject a replay onto a DevAddr that
+    // was freed (generation 0) or freed-and-recycled (a different generation)
+    // between capture and launch, instead of clobbering the new occupant.
+    uint64_t generation_of(DevAddr addr) const noexcept HAZE_EXCLUDES(mutex_);
 
     void reset() noexcept HAZE_EXCLUDES(mutex_);
 
@@ -200,8 +215,15 @@ class DeviceAllocator {
         pool_free_ HAZE_GUARDED_BY(mutex_); // free list for poly_bytes_-sized allocations
     std::unordered_set<const void *>
         host_set_ HAZE_GUARDED_BY(mutex_); // pointers from hazeHostAlloc
+    // Per-live-address allocation generation, kept in lockstep with alloc_set_:
+    // stamped on every allocate_one_locked, erased on free_one_locked, cleared
+    // on reset. Backs generation_of() for graph-launch lifetime validation.
+    std::unordered_map<DevAddr, uint64_t> addr_generation_ HAZE_GUARDED_BY(mutex_);
     size_t poly_bytes_ HAZE_GUARDED_BY(mutex_) = 0;
     uintptr_t next_addr_ HAZE_GUARDED_BY(mutex_) = kHbmBase;
+    // Monotonic source for addr_generation_ stamps; never reset to a prior
+    // value so a generation is unique for the whole process lifetime.
+    uint64_t alloc_generation_ HAZE_GUARDED_BY(mutex_) = 0;
 };
 
 inline DeviceAllocator &allocator() noexcept {

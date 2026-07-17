@@ -1,0 +1,130 @@
+name: sanitizers
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sanitizers-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sanitizers:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Legs are mutually exclusive builds; keep both running if one fails.
+      fail-fast: false
+      matrix:
+        include:
+          - name: asan-ubsan
+            cmake_flag: HAZE_SANITIZERS
+            build_dir: build-asan
+          - name: tsan
+            cmake_flag: HAZE_TSAN
+            build_dir: build-tsan
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h
+
+      - name: Verify nested submodules cloned
+        run: |
+          test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
+          test -d vendor/niobium-fhetch/vendor/json
+
+      - name: Capture OpenFHE submodule commits
+        id: openfhe_rev
+        run: |
+          rev=$(git -C vendor/niobium-fhetch/vendor/openfhe rev-parse HEAD)
+          stock_rev=$(git -C vendor/openfhe rev-parse HEAD)
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "stock_rev=$stock_rev" >> "$GITHUB_OUTPUT"
+
+      - name: Cache OpenFHE install dirs
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            vendor/niobium-fhetch/vendor/lib/openfhe
+            vendor/niobium-fhetch/vendor/openfhe/build
+            vendor/lib/openfhe-stock
+            vendor/openfhe/build
+          key: ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-${{ steps.openfhe_rev.outputs.rev }}-${{ steps.openfhe_rev.outputs.stock_rev }}
+          restore-keys: |
+            ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
+
+      # Instrumented OpenFHE (debug); installs to vendor/niobium-fhetch/vendor/lib/openfhe.
+      - name: Build instrumented OpenFHE
+        run: nix develop --command make build-openfhe MODE=debug
+
+      # Dedicated build dir configured directly: make config would omit the
+      # sanitizer option. HAZE_BUILD_E2E_TESTS=0 skips the stock OpenFHE + e2e exe.
+      - name: Configure (${{ matrix.cmake_flag }})
+        run: |
+          nix develop --command cmake -S . -B ${{ matrix.build_dir }} \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -D${{ matrix.cmake_flag }}=ON \
+            -DOPENFHE_INSTALL_DIR="$PWD/vendor/niobium-fhetch/vendor/lib/openfhe" \
+            -DHAZE_BUILD_TESTS=ON \
+            -DHAZE_BUILD_E2E_TESTS=0
+
+      - name: Build haze_tests
+        run: nix develop --command cmake --build ${{ matrix.build_dir }} -j "$(nproc)" --target haze_tests
+
+      # Run the binary directly: make test-* would rebuild and drop the sanitizer
+      # flags. cd into runs/ so libnbfhetch's program_dir resolves under the build
+      # tree. ASan leg loads the repo-root LSan suppressions for known upstream leaks.
+      - name: Run haze_tests (${{ matrix.name }})
+        run: |
+          set -o pipefail
+          mkdir -p ${{ matrix.build_dir }}/runs
+          cd ${{ matrix.build_dir }}/runs
+          # Sanitizer reports go to sanitizer.log.<pid> under runs/; each suite's
+          # console output is mirrored to a transcript. Both are collected by the
+          # failure-artifact upload below.
+          if [ "${{ matrix.name }}" = "asan-ubsan" ]; then
+            export ASAN_OPTIONS="log_path=sanitizer.log"
+            export LSAN_OPTIONS="suppressions=$GITHUB_WORKSPACE/.lsan_suppressions:log_path=sanitizer.log"
+            export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1:log_path=sanitizer.log"
+          else
+            export TSAN_OPTIONS="halt_on_error=1:log_path=sanitizer.log"
+          fi
+          # Non-integration suite, integration suite, then the hidden
+          # [.][concurrency] lock-hardening cases (run on both legs; the
+          # [.][hardware] cases remain opt-in and are not run here).
+          HAZE_TARGET=local ../haze_tests "~[integration]" 2>&1 | tee run-default.log
+          HAZE_TARGET=local ../haze_tests "[integration]" 2>&1 | tee run-integration.log
+          HAZE_TARGET=local ../haze_tests "[concurrency]" 2>&1 | tee run-concurrency.log
+
+      - name: Upload sanitizer logs on failure
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sanitizer-logs-${{ matrix.name }}-${{ github.run_attempt }}
+          path: ${{ matrix.build_dir }}/runs/
+          if-no-files-found: ignore
+          retention-days: 7

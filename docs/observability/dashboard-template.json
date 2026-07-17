@@ -1,0 +1,232 @@
+{
+  "__meta": {
+    "description": "Grafana-style dashboard template for the Haze (libhaze) runtime performance counters exposed by hazeGetPerformanceCounters() into a hazePerformanceCounters struct (include/haze/haze_types.h). This is a self-describing TEMPLATE: replace ${DS_HAZE} with a real datasource and adapt the metric names to your exporter's namespace. Each metric name below embeds the exact hazePerformanceCounters field it visualizes. Counter semantics and the reinterpreted Observability rule are documented in docs/observability/README.md; design rationale lives in docs/decision-log.md.",
+    "counter_source_struct": "hazePerformanceCounters",
+    "counter_query_function": "hazeGetPerformanceCounters",
+    "counter_reset_semantics": "cumulative since process start or the most recent hazeDeviceReset()",
+    "counter_consistency_semantics": "hazeGetPerformanceCounters returns a COHERENT snapshot of all seven fields at one instant (no torn read); hazeDeviceReset zeroes all seven as one indivisible step. Adds SATURATE at UINT64_MAX rather than wrapping. See src/core/metrics.hpp and docs/decision-log.md (D-25). Panels showing per-second rates should account for saturation and for resets appearing as counter drops to zero.",
+    "fields": {
+      "op_count": "high-level ops emitted (add/mul/NTT/automorph SRP+MRP and basis-convert), counted ONCE per op regardless of MRP residue fan-out; device-to-device copies are NOT counted here",
+      "bytes_h2d": "cumulative host-to-device bytes moved (allocator copy hooks)",
+      "bytes_d2h": "cumulative device-to-host bytes moved (allocator copy hooks)",
+      "bytes_d2d": "cumulative device-to-device bytes moved, charged only after a copy succeeds (SRP and MRP, the latter across its residue count)",
+      "flush_count": "number of hazeFlush() replay invocations",
+      "flush_time_ns_total": "cumulative flush/replay wall time (nanoseconds)",
+      "flush_time_ns_last": "most-recent flush/replay wall time (nanoseconds)"
+    }
+  },
+  "__inputs": [
+    {
+      "name": "DS_HAZE",
+      "label": "Haze metrics datasource",
+      "description": "Datasource that exports the hazePerformanceCounters fields as time series.",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Op Count — high-level ops emitted",
+      "description": "hazePerformanceCounters.op_count: high-level ops emitted, counted ONCE per op regardless of MRP residue fan-out (an MRP add is one op, not one-per-residue), and EXCLUDING device-to-device copies (those advance bytes_d2d only). Fed from the compute op shims (src/core/compute.hpp) and basis-convert (src/core/basis_convert.cpp). The aggregate op_count is the shipped ABI counter; the per-op-type ${op_type} split (add/mul/NTT/automorph/basis-convert) is a dashboard-side label dimension the exporter may attach — the struct exposes only the single aggregate field.",
+      "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["last", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+          "expr": "haze_op_count",
+          "legendFormat": "op_count (total)"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+          "expr": "haze_op_count{op_type=~\"$op_type\"}",
+          "legendFormat": "op_count {{op_type}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Bytes Moved by Direction",
+      "description": "hazePerformanceCounters.bytes_h2d / bytes_d2h / bytes_d2d: cumulative bytes moved per direction, one-to-one with hazeMemcpyKind. bytes_h2d and bytes_d2h are fed by the allocator copy hooks (src/core/allocator.cpp); bytes_d2d is charged by the device-to-device memcpy hooks (src/core/epoch.cpp) only AFTER a copy succeeds, covering both SRP and MRP (the latter across its residue count). Invalid or rejected copies are not metered.",
+      "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["last", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+          "expr": "haze_bytes_h2d",
+          "legendFormat": "bytes_h2d (host-to-device)"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+          "expr": "haze_bytes_d2h",
+          "legendFormat": "bytes_d2h (device-to-host)"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+          "expr": "haze_bytes_d2d",
+          "legendFormat": "bytes_d2d (device-to-device)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Flush Count",
+      "description": "hazePerformanceCounters.flush_count: number of hazeFlush() replay invocations since process start or the last hazeDeviceReset().",
+      "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "thresholds" } },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+          "expr": "haze_flush_count",
+          "legendFormat": "flush_count"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Flush Time — Cumulative",
+      "description": "hazePerformanceCounters.flush_time_ns_total: cumulative flush/replay wall time in nanoseconds.",
+      "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ns",
+          "custom": { "drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["last", "max"] },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+          "expr": "haze_flush_time_ns_total",
+          "legendFormat": "flush_time_ns_total"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Flush Time — Last",
+      "description": "hazePerformanceCounters.flush_time_ns_last: most-recent flush/replay wall time in nanoseconds.",
+      "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "ns", "color": { "mode": "thresholds" } },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_HAZE}" },
+          "expr": "haze_flush_time_ns_last",
+          "legendFormat": "flush_time_ns_last"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["haze", "libhaze", "observability", "fhe"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Op type",
+        "multi": true,
+        "name": "op_type",
+        "options": [
+          { "selected": true, "text": "All", "value": "$__all" },
+          { "selected": false, "text": "add", "value": "add" },
+          { "selected": false, "text": "mul", "value": "mul" },
+          { "selected": false, "text": "NTT", "value": "ntt" },
+          { "selected": false, "text": "automorph", "value": "automorph" },
+          { "selected": false, "text": "basis-convert", "value": "basis_convert" }
+        ],
+        "query": "add,mul,ntt,automorph,basis_convert",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Haze (libhaze) Runtime Performance Counters",
+  "uid": "haze-perf-counters",
+  "version": 1,
+  "weekStart": ""
+}

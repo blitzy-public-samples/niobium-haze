@@ -1,0 +1,199 @@
+{
+  "context": {
+    "date": "2026-07-15T11:40:20+00:00",
+    "host_name": "reverse-code-generator-0f5737fe-6k4fn",
+    "executable": "/tmp/blitzy/niobium-haze/blitzy-9d72c435-3147-4ec3-ad68-d4ef82f8ee9e_bcdd15/build/haze_benchmarks",
+    "num_cpus": 128,
+    "mhz_per_cpu": 2600,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 49152,
+        "num_sharing": 2
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 2
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 1310720,
+        "num_sharing": 2
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 56623104,
+        "num_sharing": 64
+      }
+    ],
+    "load_avg": [
+      3.74316,
+      3.36475,
+      3.26172
+    ],
+    "library_version": "1.9.1",
+    "library_build_type": "debug",
+    "json_schema_version": 1,
+    "haze_environment": {
+      "git_commit": "06c74fcb64a7096b6c41358f446f9c2ab7f582d9",
+      "git_branch": "blitzy-9d72c435-3147-4ec3-ad68-d4ef82f8ee9e",
+      "compiler": "Ubuntu clang version 19.1.7 (6ubuntu3)",
+      "cmake_build_type": "Release",
+      "cxx_flags": "-O3 -std=c++23 (project drops -DNDEBUG in Release, so asserts stay active)",
+      "libhaze_linkage": "benchmarks link the shipped libhaze.so via the public haze* C ABI",
+      "os": "Ubuntu 25.10",
+      "kernel": "Linux 6.6.122+",
+      "target": "HAZE_TARGET=local (in-process FHETCH simulator; no external compiler)",
+      "shared_host_note": "Captured on a shared multi-tenant host (see context.load_avg); the regression gate applies a tolerance threshold rather than exact match."
+    }
+  },
+  "benchmarks": [
+    {
+      "name": "BM_HazeAdd/iterations:1000",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "BM_HazeAdd/iterations:1000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 1000,
+      "real_time": 383.21223109960556,
+      "cpu_time": 382.5839999999983,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_HazeAddMrp/iterations:1000",
+      "family_index": 1,
+      "per_family_instance_index": 0,
+      "run_name": "BM_HazeAddMrp/iterations:1000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 1000,
+      "real_time": 1818.9819529652596,
+      "cpu_time": 1818.8190000000009,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_HazeMul/iterations:1000",
+      "family_index": 2,
+      "per_family_instance_index": 0,
+      "run_name": "BM_HazeMul/iterations:1000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 1000,
+      "real_time": 329.97317612171173,
+      "cpu_time": 329.8120000000005,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_HazeMulMrp/iterations:1000",
+      "family_index": 3,
+      "per_family_instance_index": 0,
+      "run_name": "BM_HazeMulMrp/iterations:1000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 1000,
+      "real_time": 1738.755963742733,
+      "cpu_time": 1719.0420000000004,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_HazeNTT/iterations:1000",
+      "family_index": 4,
+      "per_family_instance_index": 0,
+      "run_name": "BM_HazeNTT/iterations:1000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 1000,
+      "real_time": 279.31295335292816,
+      "cpu_time": 279.12199999999973,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_HazeNTTMrp/iterations:1000",
+      "family_index": 5,
+      "per_family_instance_index": 0,
+      "run_name": "BM_HazeNTTMrp/iterations:1000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 1000,
+      "real_time": 1281.1538763344288,
+      "cpu_time": 1281.0180000000018,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_HazeAutomorph/iterations:1000",
+      "family_index": 6,
+      "per_family_instance_index": 0,
+      "run_name": "BM_HazeAutomorph/iterations:1000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 1000,
+      "real_time": 261.9680017232895,
+      "cpu_time": 261.6950000000028,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_HazeAutomorphMrp/iterations:1000",
+      "family_index": 7,
+      "per_family_instance_index": 0,
+      "run_name": "BM_HazeAutomorphMrp/iterations:1000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 1000,
+      "real_time": 1358.6301356554031,
+      "cpu_time": 1358.5449999999958,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_RecordFlushReplaySrp/iterations:100",
+      "family_index": 8,
+      "per_family_instance_index": 0,
+      "run_name": "BM_RecordFlushReplaySrp/iterations:100",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 100,
+      "real_time": 10980950.128287077,
+      "cpu_time": 10970429.320000002,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_RecordFlushReplayMrp/iterations:100",
+      "family_index": 9,
+      "per_family_instance_index": 0,
+      "run_name": "BM_RecordFlushReplayMrp/iterations:100",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 100,
+      "real_time": 50047504.510730505,
+      "cpu_time": 49972483.15999999,
+      "time_unit": "ns"
+    }
+  ],
+  "_note": "Real measured baseline captured with 'make bench' (Google Benchmark, Release/-O3, in-process FHETCH simulator, HAZE_TARGET=local). The full environment is recorded under 'context' and 'context.haze_environment'. Timings were taken on a shared multi-tenant host (see context.load_avg). The regression gate is scripts/bench_compare.py, wired into .github/workflows/benchmark.yml: it keys benchmarks by base name (the text before the first '/'), reduces each benchmark's iteration rows to their MEDIAN (so this single-shot baseline compares as a median-of-one against current runs that use --benchmark_repetitions), and applies a tolerance threshold rather than exact match. The gate FAILS on any missing or renamed benchmark, any errored or skipped run, an empty baseline, or a regression beyond the threshold. Refresh on a documented, quiet environment via 'make bench', then copy build/benchmark_results.json over this file. Tool-choice and methodology rationale: docs/decision-log.md."
+}

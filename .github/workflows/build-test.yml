@@ -20,8 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           submodules: recursive
           fetch-depth: 1
 
@@ -60,7 +61,7 @@ jobs:
         # nix toolchain moves. The stock OpenFHE (vendor/openfhe) builds
         # into the same release `build/` dir and installs to
         # vendor/lib/openfhe-stock; cache both alongside the instrumented one.
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             vendor/niobium-fhetch/vendor/lib/openfhe
@@ -72,14 +73,14 @@ jobs:
             ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v22
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: Magic Nix Cache
         # Free, zero-config cache of /nix/store via the GitHub Actions
         # cache. Restored after sunset by reverse-engineering the new
         # Actions cache API; documented combo is nix-installer-action
         # then magic-nix-cache-action.
-        uses: DeterminateSystems/magic-nix-cache-action@v13
+        uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
 
       - name: Verify devshell evaluates
         run: nix develop --command bash -c 'clang --version && cmake --version'
@@ -101,7 +102,7 @@ jobs:
 
       - name: Upload build logs on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: build-logs-${{ github.run_attempt }}
           path: |

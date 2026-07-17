@@ -1,0 +1,96 @@
+name: benchmark
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Google Benchmark + regression gate (nix devshell)
+    runs-on: ubuntu-latest
+    env:
+      # Fractional cpu_time regression threshold for the baseline comparison.
+      BENCH_REGRESSION_THRESHOLD: "0.50"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h
+
+      - name: Verify nested submodules cloned
+        run: |
+          test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
+          test -d vendor/niobium-fhetch/vendor/json
+
+      - name: Capture OpenFHE submodule commits
+        id: openfhe_rev
+        run: |
+          rev=$(git -C vendor/niobium-fhetch/vendor/openfhe rev-parse HEAD)
+          stock_rev=$(git -C vendor/openfhe rev-parse HEAD)
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "stock_rev=$stock_rev" >> "$GITHUB_OUTPUT"
+
+      - name: Cache OpenFHE install dirs
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            vendor/niobium-fhetch/vendor/lib/openfhe
+            vendor/niobium-fhetch/vendor/openfhe/build
+            vendor/lib/openfhe-stock
+            vendor/openfhe/build
+          key: ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-${{ steps.openfhe_rev.outputs.rev }}-${{ steps.openfhe_rev.outputs.stock_rev }}
+          restore-keys: |
+            ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
+
+      # Separate haze_benchmarks executable; never absorbed into the shipped libhaze.
+      - name: Build + run benchmarks (make bench, JSON out)
+        run: nix develop --command make bench MODE=release
+
+      # Robust regression gate (scripts/bench_compare.py): reads iteration rows
+      # only, keys benchmarks by base name, compares the MEDIAN per benchmark,
+      # and FAILS on any missing/renamed benchmark, any errored/skipped run, an
+      # empty baseline, or a regression beyond the threshold. Pure stdlib, so it
+      # runs on the runner's system python3 (no devshell required).
+      - name: Compare against baseline (flag regressions)
+        env:
+          CURRENT: build/benchmark_results.json
+          BASELINE: benchmark/baseline.json
+        run: |
+          python3 scripts/bench_compare.py "$BASELINE" "$CURRENT" \
+            --threshold "$BENCH_REGRESSION_THRESHOLD"
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: benchmark-results-${{ github.run_attempt }}
+          path: build/benchmark_results.json
+          if-no-files-found: ignore
+          retention-days: 7

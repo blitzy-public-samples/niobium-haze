@@ -13,7 +13,9 @@
 #include "core/device.hpp"
 
 #include "common/errors.hpp"
+#include "core/metrics.hpp"
 
+#include <cstring>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 
@@ -44,17 +46,33 @@ extern "C" hazeError_t hazeDeviceSynchronize() noexcept {
     return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazeDeviceEnablePeerAccess(int /*peer*/, unsigned int /*flags*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
+extern "C" hazeError_t hazeDeviceEnablePeerAccess(int peer, unsigned int flags) noexcept {
+    return set_internal_result(haze::device_enable_peer_access(peer, flags));
 }
 
-extern "C" hazeError_t hazeDeviceCanAccessPeer(int *can_access, int /*device*/,
-                                               int /*peer*/) noexcept {
+extern "C" hazeError_t hazeDeviceCanAccessPeer(int *can_access, int device, int peer) noexcept {
     if (can_access != nullptr)
         *can_access = 0;
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
+    if (can_access == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    auto result = haze::device_can_access_peer(device, peer);
+    if (!result)
+        return set_error(haze::to_public_error(result.error()));
+    *can_access = *result ? 1 : 0;
+    return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazeGetPerformanceCounters(void * /*counters*/) noexcept {
+extern "C" hazeError_t hazeGetPerformanceCounters(void *counters) noexcept {
+    if (counters == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    // Take a coherent snapshot into a properly-aligned local, then copy the raw
+    // bytes to the caller's buffer. `counters` is a plain void* whose alignment
+    // is unknown, so a typed store through it (*static_cast<T*>(counters) = ...)
+    // would be undefined behaviour on a misaligned buffer; std::memcpy is
+    // well-defined for any alignment (M2). The ABI contract (documented in
+    // haze.h) is that `counters` points to at least
+    // sizeof(hazePerformanceCounters) writable bytes.
+    const hazePerformanceCounters snap = haze::metrics().snapshot();
+    std::memcpy(counters, &snap, sizeof(snap));
     return HAZE_SUCCESS;
 }

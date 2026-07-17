@@ -111,7 +111,16 @@ extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*fla
 }
 
 extern "C" hazeError_t hazeFreeHost(void *ptr) noexcept {
-    haze::allocator().unregister_host_pointer(ptr);
+    // Freeing NULL is a documented no-op success (matches free(NULL) and the
+    // hazeFree(NULL) convention).
+    if (ptr == nullptr)
+        return HAZE_SUCCESS;
+    // Only free a pointer this allocator currently tracks. unregister returns
+    // false for a foreign or already-freed pointer, in which case calling
+    // libc free() would abort (invalid/double free); return the documented
+    // error instead so no termination crosses the noexcept C ABI.
+    if (!haze::allocator().unregister_host_pointer(ptr))
+        return set_error(HAZE_ERROR_UNKNOWN_ADDRESS);
     // posix_memalign-allocated; libc free is the matched deallocator.
     free(ptr); // NOLINT(cppcoreguidelines-no-malloc)
     return HAZE_SUCCESS;
@@ -159,13 +168,25 @@ extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, s
                                      size_t base_len) noexcept {
     if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
+    // P7-ABI-01: reject a hostile MRP group size before the core copy routines
+    // iterate/reserve over it. base_len is the residue/modulus count: it is the
+    // loop bound and the index range into dst[]/src[]/base[], and
+    // copy_device_to_device_mrp reserve()s it (an unbounded value walks past the
+    // arrays and can throw std::length_error, aborting across the HAZE_NOEXCEPT
+    // boundary). A valid MRP group spans no more residues than the device
+    // supports moduli. NOTE: `count` is the per-residue polynomial byte count
+    // (validated against the configured polynomial size downstream), not a
+    // residue count, so it is deliberately NOT bounded here.
+    if (base_len > static_cast<size_t>(haze::kMaxCiphertextModuli))
+        return set_error(HAZE_ERROR_INVALID_VALUE);
 
     if (kind == HAZE_MEMCPY_HOST_TO_DEVICE)
         return set_internal_result(haze::copy_h2d_mrp(dst, src, count, base_len));
     if (kind == HAZE_MEMCPY_DEVICE_TO_HOST)
         return set_internal_result(haze::copy_to_host_mrp(dst, src, count, base_len));
     if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE)
-        return set_internal_result(haze::copy_device_to_device_mrp(dst, src, base, base_len));
+        return set_internal_result(
+            haze::copy_device_to_device_mrp(dst, src, count, base, base_len));
 
     return set_error(HAZE_ERROR_INVALID_VALUE);
 }
@@ -185,8 +206,28 @@ extern "C" hazeError_t hazeMemsetAsync(void *dev_ptr, int value, size_t count,
     return hazeMemset(dev_ptr, value, count);
 }
 
-extern "C" hazeError_t hazeMemcpyPeerAsync(void * /*dst*/, int /*dst_device*/, const void * /*src*/,
-                                           int /*src_device*/, size_t /*count*/,
+extern "C" hazeError_t hazeMemcpyPeerAsync(void *dst, int dst_device, const void *src,
+                                           int src_device, size_t count,
                                            hazeStream_t /*stream*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
+    if (dst == nullptr || src == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    // Reject negative / out-of-range device ordinals before any pointer lookup.
+    // On the single-device simulator only ordinal 0 is in range.
+    const int devices = haze::device_count();
+    if (dst_device < 0 || dst_device >= devices || src_device < 0 || src_device >= devices)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    // Enforce peer authorization before recording (P1): a same-device copy is
+    // always permitted, but a copy between distinct devices requires peer
+    // access to have been enabled. This connects the peer capability/enable
+    // state to the copy path instead of bypassing it. The device lock is taken
+    // and released entirely inside this call, before copy_device_to_device
+    // acquires the epoch lock, so the device mutex never nests with the epoch
+    // or allocator mutex.
+    if (auto authorized = haze::device_peer_copy_authorized(dst_device, src_device); !authorized)
+        return set_internal_result(authorized);
+    // copy_device_to_device validates destination liveness and the exact
+    // polynomial byte count, and meters the transfer only after it succeeds
+    // (P3), so no invalid or unsupported peer copy is ever counted as moved.
+    return set_internal_result(
+        haze::copy_device_to_device(haze::to_dev_addr(dst), haze::to_dev_addr(src), count));
 }

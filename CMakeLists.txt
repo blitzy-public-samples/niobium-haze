@@ -155,6 +155,25 @@ if(HAZE_TSAN)
 endif()
 
 # ---------------------------------------------------------------------------
+# Coverage option (P2c) — Clang source-based coverage instrumentation
+# ---------------------------------------------------------------------------
+# Independent of the sanitizer options above; coverage may be combined with a
+# normal build (the coverage CI job runs its own configuration). Gated behind
+# the option so ordinary builds are byte-for-byte unaffected. llvm-cov /
+# llvm-profdata ship with the Clang 19 toolchain, so no new runtime dependency
+# is added — only these compile/link flags, consumed by scripts/coverage.sh.
+option(HAZE_COVERAGE
+       "Instrument with Clang source-based coverage (-fprofile-instr-generate -fcoverage-mapping)." OFF)
+
+if(HAZE_COVERAGE)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "HAZE_COVERAGE requires Clang (source-based coverage via llvm-cov/llvm-profdata).")
+  endif()
+  add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+  add_link_options(-fprofile-instr-generate -fcoverage-mapping)
+endif()
+
+# ---------------------------------------------------------------------------
 # libhaze shared library
 # ---------------------------------------------------------------------------
 # Niobium::fhetch (libnbfhetch) supplies:
@@ -188,6 +207,8 @@ add_library(haze_objs OBJECT
   src/core/config.cpp
   src/core/device.cpp
   src/core/epoch.cpp
+  src/core/graph.cpp
+  src/core/metrics.cpp
   src/core/mrp_polymap.cpp
   src/core/polynomial_io.cpp
   src/core/stream.cpp
@@ -354,6 +375,24 @@ if(TARGET niobium_fhetch)
 endif()
 
 # ---------------------------------------------------------------------------
+# Benchmarks (opt-in) — P1b
+# ---------------------------------------------------------------------------
+# Google Benchmark microbenchmark harness for the FHE compute ops and the
+# record->flush->replay path. Built as a SEPARATE executable that links the
+# shipped libhaze.so (the haze* C ABI) — it is never absorbed into the library,
+# so the shipped artifact, its ABI, and the symbol-leak audit are byte-for-byte
+# unaffected. Default OFF so the normal build and all CI merge gates are
+# untouched; `make bench` and the benchmark workflow turn it ON. Placed before
+# the HAZE_BUILD_TESTS opt-out below so benchmarks can be built without the
+# Catch2 test suite.
+option(HAZE_BUILD_BENCHMARKS
+  "Build the Google Benchmark harness (needs the benchmark CONFIG package)." OFF)
+if(HAZE_BUILD_BENCHMARKS)
+  find_package(benchmark CONFIG REQUIRED)
+  add_subdirectory(benchmark)
+endif()
+
+# ---------------------------------------------------------------------------
 # Tests (opt-out)
 # ---------------------------------------------------------------------------
 # Everything below builds the test suite + the isolation symbol-leak check and
@@ -438,6 +477,26 @@ add_executable(haze_tests
   test/test_mrp_group_reuse.cpp
   test/test_replay_bridge_program_dir.cpp
   test/test_hardware_format.cpp
+  # Public-API backfill + error/edge-case hardening + feature tests. Unit cases
+  # run under haze_unit_tests; the [integration]-tagged cases run under
+  # haze_sim_tests; peer-access multi-chip cases carry Catch2's hidden [.] tag
+  # so the default suite stays green without physical multi-device hardware.
+  test/test_stream_event_lifecycle.cpp
+  test/test_async_ops.cpp
+  test/test_device_api.cpp
+  test/test_host_memory.cpp
+  test/test_introspection.cpp
+  test/test_documented_noops.cpp
+  test/test_error_paths.cpp
+  test/test_error_semantics.cpp
+  test/test_unflushed_reads.cpp
+  test/test_config_errors.cpp
+  test/test_allocator_limits.cpp
+  test/test_polynomial_io.cpp
+  test/test_graph_capture.cpp
+  test/test_peer_access.cpp
+  test/test_performance_counters.cpp
+  test/test_observability.cpp
   # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
   # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.
   # `ops.cpp` is the shared per-mode operation library these tests build on.

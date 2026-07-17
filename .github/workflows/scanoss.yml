@@ -26,12 +26,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: SCANOSS Delta Scan
-        uses: scanoss/gha-code-scan@v1
+        uses: scanoss/gha-code-scan@d3c8f659544885761c8e3b96743ea14b830474aa # v1.7.0
         with:
           api.key: ${{ secrets.SCANOSS_API_KEY }}
           github.token: ${{ github.token }}
@@ -47,8 +48,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Remove non-source files that crash SCANOSS
@@ -71,7 +73,7 @@ jobs:
           rm -rf Datasets assets node_modules __pycache__ .venv bmenv .next dist build 2>/dev/null || true
 
       - name: SCANOSS Full Scan
-        uses: scanoss/gha-code-scan@v1
+        uses: scanoss/gha-code-scan@d3c8f659544885761c8e3b96743ea14b830474aa # v1.7.0
         with:
           api.key: ${{ secrets.SCANOSS_API_KEY }}
           github.token: ${{ github.token }}

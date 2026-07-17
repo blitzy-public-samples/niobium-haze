@@ -16,6 +16,7 @@
 #include "common/handle.hpp"
 #include "core/config.hpp"
 #include "core/epoch.hpp"
+#include "core/metrics.hpp"
 #include "core/mrp_polymap.hpp"
 
 #include <cstddef>
@@ -45,6 +46,8 @@ std::expected<void, HazeInternalError> binary_pp_op(DevAddr dst, DevAddr src1, D
     if (!p2)
         return std::unexpected(p2.error());
     epoch().store_compute_result_locked(dst, OpFn(*p1, *p2, q), q);
+    // One high-level op emitted; reached only on the success path (M1).
+    metrics().add_op();
     return {};
 }
 
@@ -61,6 +64,8 @@ std::expected<void, HazeInternalError> binary_ps_op(DevAddr dst, DevAddr src, ui
         return std::unexpected(p.error());
     epoch().store_compute_result_locked(dst, OpFn(*p, niobium::fhetch::Scalar::from_int(scalar), q),
                                         q);
+    // One high-level op emitted; reached only on the success path (M1).
+    metrics().add_op();
     return {};
 }
 
@@ -75,6 +80,8 @@ std::expected<void, HazeInternalError> unary_pq_op(DevAddr dst, DevAddr src, int
     if (!p)
         return std::unexpected(p.error());
     epoch().store_compute_result_locked(dst, OpFn(*p, q), q);
+    // One high-level op emitted; reached only on the success path (M1).
+    metrics().add_op();
     return {};
 }
 
@@ -96,6 +103,8 @@ std::expected<void, HazeInternalError> unary_pi_op(DevAddr dst, DevAddr src,
         niobium::fhetch::bind_modulus(result, q);
     }
     epoch().store_compute_result_locked(dst, std::move(result), q);
+    // One high-level op emitted; reached only on the success path (M1).
+    metrics().add_op();
     return {};
 }
 
@@ -119,6 +128,9 @@ binary_pp_op_mrp(void *const *dst, const void *const *src1, const void *const *s
     auto stored = store_mrp_locked(dst, result, base, base_len);
     if (!stored)
         return std::unexpected(stored.error());
+    // One high-level MRP op emitted, counted once regardless of residue
+    // fan-out; reached only after every residue stored successfully (M1).
+    metrics().add_op();
     return {};
 }
 
@@ -136,6 +148,9 @@ binary_ps_op_mrp(void *const *dst, const void *const *src, const uint64_t *scala
     auto stored = store_mrp_locked(dst, result, base, base_len);
     if (!stored)
         return std::unexpected(stored.error());
+    // One high-level MRP op emitted, counted once regardless of residue
+    // fan-out; reached only after every residue stored successfully (M1).
+    metrics().add_op();
     return {};
 }
 
@@ -153,6 +168,9 @@ std::expected<void, HazeInternalError> unary_p_op_mrp(void *const *dst, const vo
     auto stored = store_mrp_locked(dst, result, base, base_len);
     if (!stored)
         return std::unexpected(stored.error());
+    // One high-level MRP op emitted, counted once regardless of residue
+    // fan-out; reached only after every residue stored successfully (M1).
+    metrics().add_op();
     return {};
 }
 
@@ -170,6 +188,9 @@ std::expected<void, HazeInternalError> unary_pi_op_mrp(void *const *dst, const v
     auto stored = store_mrp_locked(dst, result, base, base_len);
     if (!stored)
         return std::unexpected(stored.error());
+    // One high-level MRP op emitted, counted once regardless of residue
+    // fan-out; reached only after every residue stored successfully (M1).
+    metrics().add_op();
     return {};
 }
 
